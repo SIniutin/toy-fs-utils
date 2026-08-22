@@ -3,11 +3,17 @@
 #include "utils/common.h"
 
 #include <ctype.h>
+#include <errno.h>
 #include <limits.h>
 #include <stddef.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+
+#define LIST_OK 0
+#define LIST_USAGE 1
+#define LIST_IO 2
+#define LIST_INTERNAL 3
 
 typedef struct
 {
@@ -16,8 +22,19 @@ typedef struct
     unsigned long inode;
     long size;
     char timestamp[64];
-    char *basename;
+    const char *basename;
 } entry_t;
+
+static int parse_limit(const char *s, long *out)
+{
+    char *end = NULL;
+    errno = 0;
+    long v = strtol(s, &end, 10);
+    if (errno != 0 || end == s || *end != '\0' || v < 0)
+        return -1;
+    *out = v;
+    return 0;
+}
 
 static char *trim(char *s)
 {
@@ -63,26 +80,36 @@ int main(int argc, char *argv[])
             sort_mode = 1;
         else if (strcmp(argv[i], "-t") == 0)
             sort_mode = 2;
-        else if (strcmp(argv[i], "-n") == 0 && i + 1 < argc)
+        else if (strcmp(argv[i], "-n") == 0)
         {
-            limit = atol(argv[++i]);
+            if (i + 1 >= argc || parse_limit(argv[i + 1], &limit) != 0)
+            {
+                fprintf(stderr, "list_trash: -n requires a non-negative integer\n");
+                return LIST_USAGE;
+            }
+            i++;
         }
-        else if (strcmp(argv[i], "--grep") == 0 && i + 1 < argc)
+        else if (strcmp(argv[i], "--grep") == 0)
         {
+            if (i + 1 >= argc)
+            {
+                fprintf(stderr, "list_trash: --grep requires a pattern\n");
+                return LIST_USAGE;
+            }
             snprintf(grep_pat, sizeof(grep_pat), "%s", argv[++i]);
         }
         else
         {
-            fprintf(stderr, "Unknown option: %s\n", argv[i]);
-            return 1;
+            fprintf(stderr, "list_trash: unknown option: %s\n", argv[i]);
+            return LIST_USAGE;
         }
     }
 
     const char *home = getenv("HOME");
     if (!home)
     {
-        fprintf(stderr, "HOME not set\n");
-        return 1;
+        fprintf(stderr, "list_trash: HOME not set\n");
+        return LIST_USAGE;
     }
 
     char log_path[PATH_MAX];
@@ -91,8 +118,13 @@ int main(int argc, char *argv[])
     FILE *f = fopen(log_path, "r");
     if (!f)
     {
-        perror("open ~/.trash.log");
-        return 1;
+        if (errno == ENOENT)
+        {
+            fprintf(stderr, "list_trash: trash is empty\n");
+            return LIST_OK;
+        }
+        perror("list_trash: open ~/.trash.log");
+        return LIST_IO;
     }
 
     entry_t *arr = NULL;
@@ -139,13 +171,21 @@ int main(int argc, char *argv[])
             {
                 fclose(f);
                 free(arr);
-                perror("realloc");
-                return 1;
+                perror("list_trash: realloc");
+                return LIST_INTERNAL;
             }
             arr = tmp_arr;
         }
 
         arr[len++] = tmp;
+    }
+
+    if (ferror(f))
+    {
+        perror("list_trash: read ~/.trash.log");
+        fclose(f);
+        free(arr);
+        return LIST_IO;
     }
 
     fclose(f);

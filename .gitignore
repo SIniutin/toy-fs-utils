@@ -53,3 +53,8 @@ dkms.conf
 
 # debug information files
 *.dwo
+
+TODO.md
+PLAN.md
+
+build/

@@ -5,6 +5,8 @@
 
 #include <stdint.h>
 
+#include "utils/queue.h"
+
 // Return codes for file_processor_t
 #define CRAWL_PROC_CONTINUE 0
 #define CRAWL_PROC_SKIP_SUBTREE 1    // meaningful only for directories
@@ -36,6 +38,17 @@ typedef struct conf
     uint32_t file_types;     // crawl_file_mask_t which files is processed
     int crawl_through;       // 1 - crawl down dirs;
 } crawler_config_t;
+
+
+// Crawler tasks own their path and are freed by crawler workers.
+typedef struct task
+{
+    char *path;
+    int depth;
+} task_t;
+
+// Runs crawler workers over a caller-provided queue.
+int crawl_directory_q(queue_t *queue, const char *root_path, const crawler_config_t *config, file_processor_t processor, void *user_data);
 
 int crawl_directory(const char *root_path, const crawler_config_t *config, file_processor_t processor, void *user_data);
 
