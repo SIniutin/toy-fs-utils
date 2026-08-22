@@ -2,6 +2,7 @@
 
 #include "utils/common.h"
 #include "utils/crawler.h"
+
 #include <sys/stat.h>
 #include <sys/types.h>
 
@@ -14,6 +15,13 @@
 #include <string.h>
 #include <unistd.h>
 
+#define NUM_THREADS 4
+
+#define RM_TRASH_OK 0
+#define RM_TRASH_USAGE 1
+#define RM_TRASH_IO 2
+#define RM_TRASH_INTERNAL 3
+
 typedef struct
 {
     char verbose;
@@ -23,6 +31,15 @@ typedef struct
     pthread_mutex_t log_lock;
     pthread_mutex_t confirm_lock;
 } data_t;
+
+static void print_help(void)
+{
+    puts("Usage: rm_trash [-h] [-v] [-i] [-r] FILE...");
+    puts("  -h  show this help");
+    puts("  -v  print trashed files");
+    puts("  -i  prompt before each file");
+    puts("  -r  recursively process regular files inside directories");
+}
 
 static int ensure_trash_dir(char *buf, size_t buf_sz)
 {
@@ -69,8 +86,7 @@ static FILE *open_log(void)
     }
 
     char path[PATH_MAX];
-    int n = snprintf(path, sizeof(path), "%s/.trash.log", home);
-    if (n < 0 || n >= (int)sizeof(path))
+    if (snprintf(path, sizeof(path), "%s/.trash.log", home) >= (int)sizeof(path))
     {
         fprintf(stderr, "rm_trash: log path is too long\n");
         return NULL;
@@ -78,9 +94,7 @@ static FILE *open_log(void)
 
     FILE *f = fopen(path, "a");
     if (!f)
-    {
-        perror("rm_trash fopen ~/.trash.log");
-    }
+        perror("rm_trash: fopen ~/.trash.log");
     return f;
 }
 
@@ -140,13 +154,6 @@ int process_file(const char *path, const struct stat *st, void *user_data)
         fprintf(stderr, "rm_trash: trash path for \"%s\" is too long\n", path);
         return 0;
     }
-    pthread_mutex_lock(&data->log_lock);
-    if (data->log)
-    {
-        fprintf(data->log, "%s | %s | %lu | %ld | %s\n", path, link_name, (unsigned long)st->st_ino, (long)st->st_size, timebuf);
-        fflush(data->log);
-    }
-    pthread_mutex_unlock(&data->log_lock);
 
     if (data->verbose)
         printf("rm_trash: link \"%s\" -> \"%s\"\n", dst_path, path);
@@ -156,6 +163,14 @@ int process_file(const char *path, const struct stat *st, void *user_data)
         fprintf(stderr, "rm_trash: failed to link \"%s\" -> \"%s\": %s\n", dst_path, path, strerror(errno));
         return 0;
     }
+
+    pthread_mutex_lock(&data->log_lock);
+    if (data->log)
+    {
+        fprintf(data->log, "%s | %s | %lu | %ld | %s\n", path, link_name, (unsigned long)st->st_ino, (long)st->st_size, timebuf);
+        fflush(data->log);
+    }
+    pthread_mutex_unlock(&data->log_lock);
 
     if (data->verbose)
         printf("rm_trash: unlink \"%s\"\n", path);
@@ -172,50 +187,66 @@ int main(int argc, char *argv[])
 {
     if (argc == 1)
     {
-        puts("rm_trash: nothing to do");
-        return 0;
+        puts("rm_trash: Usage <files-to-trash> of -h for more info");
+        return RM_TRASH_OK;
     }
-    crawler_config_t config = { .max_threads = 4, .max_depth = 100000, .follow_symlinks = 0, .file_types = CRAWL_F_REG, .crawl_through = 1 };
-    data_t data = { .verbose = 0, .confirm = 0, .log = NULL, .trash_dir = { 0 } };
+    crawler_config_t config = {.max_threads = NUM_THREADS, .max_depth = UINT_MAX, .follow_symlinks = 0, .file_types = CRAWL_F_REG, .crawl_through = 0};
+    data_t data = {.verbose = 0, .confirm = 0, .log = NULL, .trash_dir = {0}};
     int argi = 1;
+
     for (; argi < argc && argv[argi][0] == '-'; ++argi)
     {
         if (strcmp(argv[argi], "-v") == 0)
             data.verbose = 1;
-        else if (strcmp(argv[argi], "-p") == 0)
+        else if (strcmp(argv[argi], "-i") == 0)
         {
             data.confirm = 1;
-            if (pthread_mutex_init(&data.confirm_lock, NULL) != 0)
-            {
-                fprintf(stderr, "rm_trash: mutex initialization failed\n");
-                return 1;
-            }
+        }
+        else if (strcmp(argv[argi], "-h") == 0)
+        {
+            print_help();
+            return RM_TRASH_OK;
+        }
+        else if (strcmp(argv[argi], "-r") == 0)
+        {
+            config.crawl_through = 1;
         }
         else
         {
             fprintf(stderr, "rm_trash: unknown option \"%s\"\n", argv[argi]);
-            return 1;
+            return RM_TRASH_USAGE;
         }
     }
 
     if (argi >= argc)
     {
         puts("rm_trash: nothing to do");
-        return 0;
+        return RM_TRASH_OK;
     }
 
     if (ensure_trash_dir(data.trash_dir, sizeof(data.trash_dir)) != 0)
-        return 1;
+        return RM_TRASH_USAGE;
 
     data.log = open_log();
     if (!data.log)
-        return 1;
+        return RM_TRASH_IO;
+
     if (pthread_mutex_init(&data.log_lock, NULL) != 0)
     {
-        fprintf(stderr, "rm_trash: mutex initialization failed\n");
-        return 1;
+        fprintf(stderr, "rm_trash: log mutex initialization failed\n");
+        fclose(data.log);
+        return RM_TRASH_INTERNAL;
     }
 
+    if (data.confirm && pthread_mutex_init(&data.confirm_lock, NULL) != 0)
+    {
+        fprintf(stderr, "rm_trash: confirm mutex initialization failed\n");
+        pthread_mutex_destroy(&data.log_lock);
+        fclose(data.log);
+        return RM_TRASH_INTERNAL;
+    }
+
+    int exit_status = RM_TRASH_OK;
     for (int i = argi; i < argc; ++i)
     {
         const char *p = argv[i];
@@ -223,24 +254,36 @@ int main(int argc, char *argv[])
         if (lstat(p, &st) != 0)
         {
             fprintf(stderr, "rm_trash: couldn't stat \"%s\": %s\n", p, strerror(errno));
+            exit_status = RM_TRASH_IO;
             continue;
         }
 
         if (S_ISDIR(st.st_mode))
         {
+            if (!config.crawl_through)
+            {
+                fprintf(stderr, "rm_trash: \"%s\" is a directory; use -r\n", p);
+                exit_status = RM_TRASH_USAGE;
+                continue;
+            }
+
             if (data.verbose)
-                fprintf(stderr, "rm_trash: crawling directory \"%s\"\n", p);
-            crawl_directory(p, &config, process_file, &data);
+                fprintf(stdout, "rm_trash: crawling directory \"%s\"\n", p);
+
+            if (crawl_directory(p, &config, process_file, &data) != 0)
+                exit_status = RM_TRASH_INTERNAL;
         }
         else
-            process_file(p, &st, &data);
+        {
+            if (process_file(p, &st, &data) != 0)
+                exit_status = RM_TRASH_IO;
+        }
     }
 
-    fclose(data.log);
-    pthread_mutex_destroy(&data.log_lock);
     if (data.confirm)
-    {
         pthread_mutex_destroy(&data.confirm_lock);
-    }
-    return 0;
+    pthread_mutex_destroy(&data.log_lock);
+    fclose(data.log);
+
+    return exit_status;
 }

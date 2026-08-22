@@ -3,45 +3,64 @@
 
 #include <pthread.h>
 
-/**
- * @brief Single linked node of the queue
- *
- * Queue stores raw pointer memory managment of the
- * value is the caller's responsibilitty
- */
-typedef struct node
-{
-    void *val;
-    struct node *next;
-} node_t;
+typedef enum {
+    QUEUE_OK = 0,
+    QUEUE_CLOSED = 1,
+    QUEUE_CANCELLED = 2,
+    QUEUE_ERROR = -1
+} queue_rc_t;
 
 /**
- *   @brief Thread-safe queue of raw pointers
+ *   @brief Thread-safe blocking queue with bounded ring buffer
+ *   @note Queue owns the ring buffer, not the values stored in it.
  */
-typedef struct queue
+typedef struct
 {
-    node_t *head;
-    node_t *tail;
+    void **items;
+
+    unsigned head;
+    unsigned tail;
+
     pthread_mutex_t mutex;
-    pthread_cond_t cond;
-    int stop;
+    pthread_cond_t not_full;
+    pthread_cond_t not_empty;
+
+    unsigned size; //TODO is unsigned best here?
+    unsigned cap;
+
+    int closed;
+    int cancelled;
 } queue_t;
 
 /**
- *  @brief Queue constructor
- *  @return Pointer on queue or NULL
+ *  @brief Queue constructor,
+ *  cap must be > 0
+ *  @return Pointer on queue or NULL with error set in errno
  */
-queue_t *make_queue();
+queue_t *make_queue(unsigned cap);
 
-int queue_push(queue_t *q, void *val);
+/**
+ *  Blocking if full
+ */
+queue_rc_t queue_push(queue_t *q, void *val);
 
-int queue_pop(queue_t *q, void **out_val);
+/**
+ *  Blocking if empty
+ */
+queue_rc_t queue_pop(queue_t *q, void **out_val);
 
-void queue_stop(queue_t *q);
+/**
+ * No more pushes; consumers may drain queued values.
+ */
+void queue_close(queue_t *q);
+
+/**
+ * Wake up and stop as soon as possible.
+ */
+void queue_cancel(queue_t *q);
 
 /**
  * @brief Queue destroyer
- * @
  */
 void free_queue(queue_t *q);
 

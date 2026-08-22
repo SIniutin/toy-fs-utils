@@ -12,6 +12,11 @@
 #include <string.h>
 #include <unistd.h>
 
+#define UNTRASH_OK 0
+#define UNTRASH_USAGE 1
+#define UNTRASH_IO 2
+#define UNTRASH_INTERNAL 3
+
 typedef struct
 {
     char original[PATH_MAX];
@@ -33,12 +38,25 @@ static char *trim(char *s)
 
 static void format_deleted_time(const char *ts, char *buf, size_t buflen)
 {
-    if (!ts || strlen(ts) < 14)
+    if (!ts)
     {
-        snprintf(buf, buflen, "%s", ts ? ts : "?");
+        snprintf(buf, buflen, "?");
         return;
     }
-    snprintf(buf, buflen, "%.4s-%.2s-%.2s %.2s:%.2s:%.2s", ts, ts + 4, ts + 6, ts + 8, ts + 10, ts + 12);
+
+    if (strlen(ts) >= 19 && ts[4] == '-' && ts[7] == '-' && ts[10] == '_' && ts[13] == '-' && ts[16] == '-')
+    {
+        snprintf(buf, buflen, "%.10s %.2s:%.2s:%.2s", ts, ts + 11, ts + 14, ts + 17);
+        return;
+    }
+
+    if (strlen(ts) >= 14)
+    {
+        snprintf(buf, buflen, "%.4s-%.2s-%.2s %.2s:%.2s:%.2s", ts, ts + 4, ts + 6, ts + 8, ts + 10, ts + 12);
+        return;
+    }
+
+    snprintf(buf, buflen, "%s", ts);
 }
 
 static void get_dirname(const char *path, char *buf, size_t buflen)
@@ -46,7 +64,6 @@ static void get_dirname(const char *path, char *buf, size_t buflen)
     const char *p = strrchr(path, '/');
     if (!p)
     {
-        // нет слеша — считаем текущую директорию
         snprintf(buf, buflen, ".");
         return;
     }
@@ -190,7 +207,7 @@ int main(int argc, char *argv[])
             if (i + 1 >= argc)
             {
                 fprintf(stderr, "untrash: --to requires directory\n");
-                return 1;
+                return UNTRASH_USAGE;
             }
             snprintf(to_dir, sizeof(to_dir), "%s", argv[++i]);
         }
@@ -203,7 +220,7 @@ int main(int argc, char *argv[])
             else
             {
                 fprintf(stderr, "untrash: unexpected extra argument: %s\n", argv[i]);
-                return 1;
+                return UNTRASH_USAGE;
             }
         }
     }
@@ -211,19 +228,19 @@ int main(int argc, char *argv[])
     if (!pattern)
     {
         fprintf(stderr, "Usage: untrash [--overwrite|--unique] [--to DIR] PATTERN\n");
-        return 1;
+        return UNTRASH_USAGE;
     }
     if (mode_overwrite && mode_unique)
     {
         fprintf(stderr, "untrash: --overwrite and --unique are mutually exclusive\n");
-        return 1;
+        return UNTRASH_USAGE;
     }
 
     const char *home = getenv("HOME");
     if (!home)
     {
         fprintf(stderr, "untrash: HOME is not set\n");
-        return 1;
+        return UNTRASH_USAGE;
     }
 
     char log_path[PATH_MAX];
@@ -234,8 +251,14 @@ int main(int argc, char *argv[])
     FILE *log = fopen(log_path, "r");
     if (!log)
     {
+        int open_errno = errno;
+        if (open_errno == ENOENT)
+        {
+            fprintf(stderr, "untrash: trash is empty\n");
+            return UNTRASH_OK;
+        }
         perror("untrash: open ~/.trash.log");
-        return 1;
+        return UNTRASH_IO;
     }
 
     struct stat st_trash;
@@ -243,9 +266,10 @@ int main(int argc, char *argv[])
     {
         fprintf(stderr, "untrash: trash dir not found: %s\n", trash_dir);
         fclose(log);
-        return 1;
+        return UNTRASH_OK;
     }
 
+    int exit_status = UNTRASH_OK;
     char line[4096];
     while (fgets(line, sizeof(line), log))
     {
@@ -303,6 +327,7 @@ int main(int argc, char *argv[])
             if (mkdir_p(dest_dir, 0755) != 0)
             {
                 fprintf(stderr, "untrash: failed to create directory %s\n", dest_dir);
+                exit_status = UNTRASH_IO;
                 continue;
             }
         }
@@ -322,6 +347,7 @@ int main(int argc, char *argv[])
                 if (mkdir_p(dest_dir, 0700) != 0)
                 {
                     fprintf(stderr, "untrash: failed to create restore-lost dir %s\n", dest_dir);
+                    exit_status = UNTRASH_IO;
                     continue;
                 }
             }
@@ -347,12 +373,14 @@ int main(int argc, char *argv[])
                     if (unlink(dest_path) != 0)
                     {
                         perror("untrash: unlink existing dest");
+                        exit_status = UNTRASH_IO;
                         continue;
                     }
                 }
                 else
                 {
                     fprintf(stderr, "untrash: destination exists, skipping: %s\n", dest_path);
+                    exit_status = UNTRASH_USAGE;
                     continue;
                 }
             }
@@ -364,6 +392,7 @@ int main(int argc, char *argv[])
         if (access(src_path, F_OK) != 0)
         {
             fprintf(stderr, "untrash: source in trash not found: %s\n", src_path);
+            exit_status = UNTRASH_IO;
             continue;
         }
 
@@ -374,9 +403,16 @@ int main(int argc, char *argv[])
         else
         {
             fprintf(stderr, "untrash: failed to restore %s\n", e.original);
+            exit_status = UNTRASH_IO;
         }
     }
 
+    if (ferror(log))
+    {
+        perror("untrash: read ~/.trash.log");
+        exit_status = UNTRASH_IO;
+    }
+
     fclose(log);
-    return 0;
+    return exit_status;
 }

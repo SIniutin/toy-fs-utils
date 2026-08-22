@@ -1,108 +1,185 @@
 #include "utils/queue.h"
 
-#include <pthread.h>
+#include <errno.h>
 #include <stdlib.h>
 
-queue_t *make_queue()
+static void wake_all(queue_t *q)
 {
-    queue_t *q = malloc(sizeof(queue_t));
+    pthread_cond_broadcast(&q->not_empty);
+    pthread_cond_broadcast(&q->not_full);
+}
+
+queue_t *make_queue(unsigned cap)
+{
+    if (cap == 0)
+    {
+        errno = EINVAL;
+        return NULL;
+    }
+
+    queue_t *q = (queue_t *)malloc(sizeof(queue_t));
     if (!q)
         return NULL;
 
-    q->tail = q->head = NULL;
-    q->stop = 0;
-    pthread_mutex_init(&q->mutex, NULL);
-    pthread_cond_init(&q->cond, NULL);
+    q->cap = cap;
+    q->size = 0;
+    q->closed = 0;
+    q->cancelled = 0;
+    q->items = malloc(sizeof(void *) * cap);
+    if (!q->items)
+    {
+        free(q);
+        errno = ENOMEM;
+        return NULL;
+    }
+    q->head = 0;
+    q->tail = 0;
+
+    if (pthread_mutex_init(&q->mutex, NULL) != 0)
+    {
+        free(q->items);
+        free(q);
+        errno = ENOMEM;
+        return NULL;
+    }
+    if (pthread_cond_init(&q->not_full, NULL) != 0)
+    {
+        pthread_mutex_destroy(&q->mutex);
+        free(q->items);
+        free(q);
+        errno = ENOMEM;
+        return NULL;
+    }
+    if (pthread_cond_init(&q->not_empty, NULL) != 0)
+    {
+        pthread_cond_destroy(&q->not_full);
+        pthread_mutex_destroy(&q->mutex);
+        free(q->items);
+        free(q);
+        errno = ENOMEM;
+        return NULL;
+    }
+
     return q;
 }
 
-int queue_push(queue_t *q, void *val)
+queue_rc_t queue_push(queue_t *q, void *val)
 {
     if (!q)
-        return 1;
+        return QUEUE_ERROR;
 
     pthread_mutex_lock(&q->mutex);
 
-    if (q->stop)
+    if (q->cancelled)
     {
         pthread_mutex_unlock(&q->mutex);
-        return 1;
+        return QUEUE_CANCELLED;
     }
-
-    node_t *n = malloc(sizeof(node_t));
-    if (!n)
+    if (q->closed)
     {
         pthread_mutex_unlock(&q->mutex);
-        return 1;
+        return QUEUE_CLOSED;
     }
 
-    n->val = val;
-    n->next = NULL;
+    while (!q->cancelled && !q->closed && q->size == q->cap)
+        pthread_cond_wait(&q->not_full, &q->mutex);
 
-    if (q->tail)
-        q->tail->next = n;
-    else
-        q->head = n;
+    if (q->cancelled)
+    {
+        pthread_mutex_unlock(&q->mutex);
+        return QUEUE_CANCELLED;
+    }
+    if (q->closed)
+    {
+        pthread_mutex_unlock(&q->mutex);
+        return QUEUE_CLOSED;
+    }
 
-    q->tail = n;
+    q->items[q->tail] = val;
+    q->tail = (q->tail + 1) % q->cap;
+    q->size++;
 
-    pthread_cond_signal(&q->cond);
+    pthread_cond_signal(&q->not_empty);
     pthread_mutex_unlock(&q->mutex);
-    return 0;
+    return QUEUE_OK;
 }
 
-int queue_pop(queue_t *q, void **out_val)
+queue_rc_t queue_pop(queue_t *q, void **out_val)
 {
     if (!q || !out_val)
-        return 1;
+        return QUEUE_ERROR;
 
     pthread_mutex_lock(&q->mutex);
 
-    while (!q->head && !q->stop)
-    {
-        pthread_cond_wait(&q->cond, &q->mutex);
-    }
+    while (!q->cancelled && q->size == 0 && !q->closed)
+        pthread_cond_wait(&q->not_empty, &q->mutex);
 
-    if (!q->head && q->stop)
+    if (q->cancelled)
     {
         pthread_mutex_unlock(&q->mutex);
-        return -1;
+        return QUEUE_CANCELLED;
     }
 
-    node_t *h = q->head;
-    *out_val = h->val;
-    q->head = h->next;
-    if (!q->head)
-        q->tail = NULL;
+    if (q->size == 0 && q->closed)
+    {
+        pthread_mutex_unlock(&q->mutex);
+        return QUEUE_CLOSED;
+    }
 
-    free(h);
+    *out_val = q->items[q->head];
+    q->items[q->head] = NULL;
+    q->head = (q->head + 1) % q->cap;
+    q->size--;
+
+    pthread_cond_signal(&q->not_full);
     pthread_mutex_unlock(&q->mutex);
-    return 0;
+    return QUEUE_OK;
 }
 
-void queue_stop(queue_t *q)
+void queue_close(queue_t *q)
 {
+    if (!q)
+        return;
     pthread_mutex_lock(&q->mutex);
-    q->stop = 1;
-    pthread_cond_broadcast(&q->cond);
+    q->closed = 1;
+    wake_all(q);
     pthread_mutex_unlock(&q->mutex);
 }
+
+void queue_cancel(queue_t *q)
+{
+    if (!q)
+        return;
+    pthread_mutex_lock(&q->mutex);
+    q->cancelled = 1;
+    wake_all(q);
+    pthread_mutex_unlock(&q->mutex);
+}
+
 void free_queue(queue_t *q)
 {
     if (!q)
         return;
 
     pthread_mutex_lock(&q->mutex);
-    node_t *cur = q->head;
-    while (cur)
+    if (q->size != 0)
     {
-        node_t *next = cur->next;
-        free(cur->val);
-        free(cur);
-        cur = next;
+        pthread_mutex_unlock(&q->mutex);
+        errno = EPERM;
+        return;
     }
+
+    q->head = 0;
+    q->tail = 0;
+    q->size = 0;
+    q->closed = 1;
+    q->cancelled = 1;
+    wake_all(q);
     pthread_mutex_unlock(&q->mutex);
 
+    free(q->items);
+    pthread_cond_destroy(&q->not_empty);
+    pthread_cond_destroy(&q->not_full);
     pthread_mutex_destroy(&q->mutex);
-    pthread_cond_destroy(&q->cond);
+    free(q);
 }
