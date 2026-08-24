@@ -60,6 +60,36 @@ static int test_fifo_table(void)
     return 0;
 }
 
+static int test_wraparound(void)
+{
+    queue_t *q = make_queue(3);
+    ASSERT_TRUE(q != NULL);
+
+    int values[] = {1, 2, 3, 4, 5};
+    void *out = NULL;
+
+    ASSERT_TRUE(queue_push(q, &values[0]) == QUEUE_OK);
+    ASSERT_TRUE(queue_push(q, &values[1]) == QUEUE_OK);
+    ASSERT_TRUE(queue_push(q, &values[2]) == QUEUE_OK);
+    ASSERT_TRUE(queue_pop(q, &out) == QUEUE_OK);
+    ASSERT_TRUE(out == &values[0]);
+    ASSERT_TRUE(queue_pop(q, &out) == QUEUE_OK);
+    ASSERT_TRUE(out == &values[1]);
+
+    ASSERT_TRUE(queue_push(q, &values[3]) == QUEUE_OK);
+    ASSERT_TRUE(queue_push(q, &values[4]) == QUEUE_OK);
+
+    ASSERT_TRUE(queue_pop(q, &out) == QUEUE_OK);
+    ASSERT_TRUE(out == &values[2]);
+    ASSERT_TRUE(queue_pop(q, &out) == QUEUE_OK);
+    ASSERT_TRUE(out == &values[3]);
+    ASSERT_TRUE(queue_pop(q, &out) == QUEUE_OK);
+    ASSERT_TRUE(out == &values[4]);
+
+    free_queue(q);
+    return 0;
+}
+
 typedef struct
 {
     const char *name;
@@ -128,6 +158,8 @@ static int test_lifecycle_table(void)
 int main(void)
 {
     if (test_fifo_table() != 0)
+        return 1;
+    if (test_wraparound() != 0)
         return 1;
     if (test_lifecycle_table() != 0)
         return 1;

@@ -83,3 +83,13 @@ add_test(
     NAME trash_e2e
     COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_trash.sh ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}
 )
+
+add_test(
+    NAME diskusage_e2e
+    COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_diskusage.sh ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}
+)
+
+add_test(
+    NAME backup_e2e
+    COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_backup.sh ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}
+)

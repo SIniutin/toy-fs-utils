@@ -175,10 +175,12 @@ static void *worker(void *arg)
                 {
                     pthread_mutex_lock(ctx->state_mt);
                     (*ctx->active_tasks)--;
+                    int already_stopping = *ctx->stopping;
                     pthread_mutex_unlock(ctx->state_mt);
 
                     free_task(nt);
-                    request_stop(ctx, -1);
+                    if (!already_stopping)
+                        request_stop(ctx, -1);
                     break;
                 }
                 continue;
