@@ -22,7 +22,6 @@ typedef struct
     unsigned long inode;
     long size;
     char timestamp[64];
-    const char *basename;
 } entry_t;
 
 static int parse_limit(const char *s, long *out)
@@ -161,8 +160,6 @@ int main(int argc, char *argv[])
             continue;
         snprintf(tmp.timestamp, sizeof(tmp.timestamp), "%s", trim(p));
 
-        tmp.basename = get_basename(tmp.original);
-
         if (len == cap)
         {
             cap = cap ? cap * 2 : 64;
@@ -195,7 +192,7 @@ int main(int argc, char *argv[])
         size_t j = 0;
         for (size_t i = 0; i < len; i++)
         {
-            if (strstr(arr[i].basename, grep_pat))
+            if (strstr(get_basename(arr[i].original), grep_pat))
                 arr[j++] = arr[i];
         }
         len = j;

@@ -1,13 +1,13 @@
 FROM ubuntu:24.04
 
 RUN apt-get update && apt-get install -y \
-    cmake make gcc g++ python3 python3-pip \
-    python3-pytest \
+    cmake make gcc g++ bash \
     && rm -rf /var/lib/apt/lists
 
 WORKDIR /app
 COPY . /app
 
-RUN bash build.sh
+RUN cmake -S . -B build -DCMAKE_C_COMPILER=gcc
+RUN cmake --build build
 
-CMD [ "pytest", "-q", "-v", "tests" ]
+CMD [ "ctest", "--test-dir", "build", "--output-on-failure" ]
