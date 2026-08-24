@@ -1,7 +1,9 @@
 #include "utils/queue.h"
 
-#include <stdio.h>
 #include <stddef.h>
+#include <pthread.h>
+#include <stdio.h>
+#include <unistd.h>
 
 #define ASSERT_TRUE(expr)                                                                                              \
     do                                                                                                                \
@@ -92,6 +94,56 @@ static int test_wraparound(void)
 
 typedef struct
 {
+    queue_t *q;
+    int *value;
+    queue_rc_t rc;
+} push_thread_ctx_t;
+
+static void *blocking_push(void *arg)
+{
+    push_thread_ctx_t *ctx = arg;
+    ctx->rc = queue_push(ctx->q, ctx->value);
+    return NULL;
+}
+
+static int test_blocking_push_cancel(void)
+{
+    queue_t *q = make_queue(1);
+    ASSERT_TRUE(q != NULL);
+
+    int a = 1;
+    int b = 2;
+    ASSERT_TRUE(queue_push(q, &a) == QUEUE_OK);
+
+    push_thread_ctx_t ctx = {.q = q, .value = &b, .rc = QUEUE_OK};
+    pthread_t th;
+    ASSERT_TRUE(pthread_create(&th, NULL, blocking_push, &ctx) == 0);
+    usleep(10000);
+    queue_cancel(q);
+    ASSERT_TRUE(pthread_join(th, NULL) == 0);
+    ASSERT_TRUE(ctx.rc == QUEUE_CANCELLED);
+
+    free_queue(q);
+    return 0;
+}
+
+static int test_null_operations(void)
+{
+    int value = 1;
+    void *out = NULL;
+
+    ASSERT_TRUE(make_queue(0) == NULL);
+    ASSERT_TRUE(queue_push(NULL, &value) == QUEUE_ERROR);
+    ASSERT_TRUE(queue_pop(NULL, &out) == QUEUE_ERROR);
+    queue_close(NULL);
+    queue_cancel(NULL);
+    free_queue(NULL);
+
+    return 0;
+}
+
+typedef struct
+{
     const char *name;
     queue_rc_t expected_push;
     queue_rc_t expected_first_pop;
@@ -160,6 +212,10 @@ int main(void)
     if (test_fifo_table() != 0)
         return 1;
     if (test_wraparound() != 0)
+        return 1;
+    if (test_blocking_push_cancel() != 0)
+        return 1;
+    if (test_null_operations() != 0)
         return 1;
     if (test_lifecycle_table() != 0)
         return 1;

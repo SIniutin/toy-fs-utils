@@ -1,12 +1,13 @@
 #define _XOPEN_SOURCE 700
 
+#include "archive/file_ops.h"
+#include "archive/paths.h"
+#include "archive/restore.h"
 #include "utils/common.h"
 #include <sys/stat.h>
 #include <sys/types.h>
 
-#include <ctype.h>
 #include <errno.h>
-#include <fcntl.h>
 #include <ftw.h>
 #include <limits.h>
 #include <stdio.h>
@@ -23,86 +24,6 @@ typedef struct
 } up_ctx_t;
 
 static up_ctx_t g_ctx;
-
-static int read_source_path(const char *backup_root, char *out, size_t out_sz)
-{
-    char p[PATH_MAX];
-    snprintf(p, sizeof(p), "%s/.source_path", backup_root);
-
-    FILE *f = fopen(p, "r");
-    if (!f)
-        return -1;
-
-    char line[PATH_MAX + 32];
-    if (!fgets(line, sizeof(line), f))
-    {
-        fclose(f);
-        return -1;
-    }
-    fclose(f);
-
-    size_t n = strcspn(line, "\r\n");
-    line[n] = '\0';
-
-    const char *val = line;
-
-    if (strncmp(line, "SOURCE=", 7) == 0)
-        val = line + 7;
-
-    if (val[0] == '\0')
-        return -1;
-
-    if (snprintf(out, out_sz, "%s", val) >= (int)out_sz)
-        return -1;
-    return 0;
-}
-
-static int copy_file(const char *src, const char *dst)
-{
-    int in = open(src, O_RDONLY);
-    if (in < 0)
-    {
-        fprintf(stderr, "upback: cannot open %s: %s\n", src, strerror(errno));
-        return -1;
-    }
-    int out = open(dst, O_WRONLY | O_CREAT | O_TRUNC, 0600);
-    if (out < 0)
-    {
-        fprintf(stderr, "upback: cannot open %s: %s\n", dst, strerror(errno));
-        close(in);
-        return -1;
-    }
-
-    char buf[65536];
-    ssize_t r;
-    while ((r = read(in, buf, sizeof(buf))) > 0)
-    {
-        ssize_t off = 0;
-        while (off < r)
-        {
-            ssize_t w = write(out, buf + off, (size_t)(r - off));
-            if (w < 0)
-            {
-                fprintf(stderr, "upback: write error: %s\n", strerror(errno));
-                close(in);
-                close(out);
-                return -1;
-            }
-            off += w;
-        }
-    }
-    if (r < 0)
-    {
-        fprintf(stderr, "upback: read error: %s\n", strerror(errno));
-        close(in);
-        close(out);
-        return -1;
-    }
-
-    close(in);
-    close(out);
-    return 0;
-}
 
 static int ask_confirm(void)
 {
@@ -125,34 +46,22 @@ static int nftw_cb(const char *fpath, const struct stat *sb, int typeflag, struc
     const char *rel = fpath + g_ctx.backup_root_len;
     if (*rel == '/')
         rel++;
-    if (strncmp(rel, ".versions", 9) == 0 && (rel[9] == '/' || rel[9] == '\0'))
-    {
-        return 0;
-    }
-    if (strcmp(rel, "versions.tar.gz") == 0)
-        return 0;
-    if (strncmp(rel, ".versions/", 10) == 0)
-        return 0;
-
-    if (*rel == '\0')
+    if (archive_restore_should_skip_rel(rel))
     {
         return 0;
     }
 
     char dest_path[PATH_MAX];
-    snprintf(dest_path, sizeof(dest_path), "%s/%s", g_ctx.dest_root, rel);
-
-    char dest_dir[PATH_MAX];
-    snprintf(dest_dir, sizeof(dest_dir), "%s", dest_path);
-    char *slash = strrchr(dest_dir, '/');
-    if (slash)
+    if (archive_restore_dest_path(g_ctx.dest_root, rel, dest_path, sizeof(dest_path)) != 0)
     {
-        *slash = '\0';
-        if (mkdir_p(dest_dir, 0755) != 0)
-        {
-            fprintf(stderr, "upback: failed to create dir %s\n", dest_dir);
-            return 0;
-        }
+        fprintf(stderr, "upback: destination path is too long: %s/%s\n", g_ctx.dest_root, rel);
+        return 0;
+    }
+
+    if (archive_restore_ensure_parent_dir(dest_path) != 0)
+    {
+        fprintf(stderr, "upback: failed to create parent dir for %s\n", dest_path);
+        return 0;
     }
 
     struct stat st_dest;
@@ -169,7 +78,7 @@ static int nftw_cb(const char *fpath, const struct stat *sb, int typeflag, struc
         }
     }
 
-    if (copy_file(fpath, dest_path) == 0)
+    if (archive_copy_file(fpath, dest_path, NULL, "upback") == 0)
     {
         printf("Restored: %s\n", dest_path);
     }
@@ -195,7 +104,11 @@ int main(int argc, char *argv[])
                 fprintf(stderr, "Usage: upback [--to DIR] BACKUP_NAME\n");
                 return 1;
             }
-            snprintf(to_dir, sizeof(to_dir), "%s", argv[++i]);
+            if (snprintf_checked(to_dir, sizeof(to_dir), "%s", argv[++i]) != 0)
+            {
+                fprintf(stderr, "upback: destination argument is too long\n");
+                return 1;
+            }
         }
         else
         {
@@ -222,13 +135,6 @@ int main(int argc, char *argv[])
     }
 
     char backup_root[PATH_MAX];
-    char tmp[PATH_MAX];
-    snprintf(tmp, sizeof(tmp), "%s/Backups/%s", home, version);
-    if (!realpath(tmp, backup_root))
-    {
-        return 1;
-    }
-
     if (strchr(version, '/'))
     {
         if (!realpath(version, backup_root))
@@ -239,7 +145,13 @@ int main(int argc, char *argv[])
     }
     else
     {
-        snprintf(backup_root, sizeof(backup_root), "%s/Backups/%s", home, version);
+        char backups_dir[PATH_MAX];
+        if (archive_backups_dir(backups_dir, sizeof(backups_dir)) != 0 ||
+            join_path_into(backup_root, sizeof(backup_root), backups_dir, version) != 0)
+        {
+            fprintf(stderr, "upback: backup path is too long\n");
+            return 1;
+        }
     }
 
     struct stat st_bak;
@@ -251,59 +163,30 @@ int main(int argc, char *argv[])
 
     char dest_root[PATH_MAX];
 
-    if (to_dir[0])
+    if (archive_restore_resolve_dest_root(backup_root, to_dir, dest_root, sizeof(dest_root)) != 0)
     {
-        if (!realpath(to_dir, dest_root))
-        {
-            snprintf(dest_root, sizeof(dest_root), "%s", to_dir);
-            if (mkdir_p(dest_root, 0755) != 0)
-            {
-                fprintf(stderr, "upback: cannot create dest dir %s\n", dest_root);
-                return 1;
-            }
-            if (!realpath(dest_root, dest_root))
-            {
-                fprintf(stderr, "upback: cannot resolve dest dir %s\n", dest_root);
-                return 1;
-            }
-        }
-    }
-    else
-    {
-        char src_restore[PATH_MAX];
-        if (read_source_path(backup_root, src_restore, sizeof(src_restore)) != 0)
-        {
+        if (!to_dir[0])
             fprintf(stderr, "upback: no .source_path in backup, use --to DIR\n");
-            return 1;
-        }
-
-        if (!realpath(src_restore, dest_root))
-        {
-            if (mkdir_p(src_restore, 0755) != 0 || !realpath(src_restore, dest_root))
-            {
-                fprintf(stderr, "upback: cannot resolve/create source dir %s\n", src_restore);
-                return 1;
-            }
-        }
-        if (mkdir_p(dest_root, 0755) != 0)
-        {
-            fprintf(stderr, "upback: cannot create dest root %s\n", dest_root);
-            return 1;
-        }
-        if (!realpath(dest_root, dest_root))
-        {
-            fprintf(stderr, "upback: cannot resolve dest root %s\n", dest_root);
-            return 1;
-        }
+        else
+            fprintf(stderr, "upback: cannot resolve/create dest dir %s\n", to_dir);
+        return 1;
     }
 
     printf("Restoring from: %s\n", backup_root);
     printf("Destination root: %s\n", dest_root);
 
     memset(&g_ctx, 0, sizeof(g_ctx));
-    snprintf(g_ctx.backup_root, sizeof(g_ctx.backup_root), "%s", backup_root);
+    if (snprintf_checked(g_ctx.backup_root, sizeof(g_ctx.backup_root), "%s", backup_root) != 0)
+    {
+        fprintf(stderr, "upback: backup path is too long\n");
+        return 1;
+    }
     g_ctx.backup_root_len = strlen(g_ctx.backup_root);
-    snprintf(g_ctx.dest_root, sizeof(g_ctx.dest_root), "%s", dest_root);
+    if (snprintf_checked(g_ctx.dest_root, sizeof(g_ctx.dest_root), "%s", dest_root) != 0)
+    {
+        fprintf(stderr, "upback: destination path is too long\n");
+        return 1;
+    }
 
     if (nftw(g_ctx.backup_root, nftw_cb, 16, FTW_PHYS) != 0)
     {

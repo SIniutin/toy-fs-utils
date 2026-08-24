@@ -1,8 +1,9 @@
 #define _XOPEN_SOURCE 700
 
-#include "utils/common.h"
+#include "trashbin/listing.h"
+#include "trashbin/log.h"
+#include "trashbin/paths.h"
 
-#include <ctype.h>
 #include <errno.h>
 #include <limits.h>
 #include <stddef.h>
@@ -15,73 +16,21 @@
 #define LIST_IO 2
 #define LIST_INTERNAL 3
 
-typedef struct
-{
-    char original[PATH_MAX];
-    char link[PATH_MAX];
-    unsigned long inode;
-    long size;
-    char timestamp[64];
-} entry_t;
-
-static int parse_limit(const char *s, long *out)
-{
-    char *end = NULL;
-    errno = 0;
-    long v = strtol(s, &end, 10);
-    if (errno != 0 || end == s || *end != '\0' || v < 0)
-        return -1;
-    *out = v;
-    return 0;
-}
-
-static char *trim(char *s)
-{
-    while (*s == ' ')
-        s++;
-
-    size_t n = strlen(s);
-    if (n == 0)
-        return s;
-
-    char *end = s + n - 1;
-    while (end > s && *end == ' ')
-        *end-- = '\0';
-
-    return s;
-}
-
-int cmp_size(const void *a, const void *b)
-{
-    const entry_t *x = a, *y = b;
-    if (y->size < x->size)
-        return -1;
-    if (y->size > x->size)
-        return 1;
-    return 0;
-}
-
-int cmp_time(const void *a, const void *b)
-{
-    const entry_t *x = a, *y = b;
-    return strcmp(y->timestamp, x->timestamp);
-}
-
 int main(int argc, char *argv[])
 {
     char grep_pat[256] = "";
-    int sort_mode = 0;
+    trash_list_sort_t sort_mode = TRASH_LIST_SORT_NONE;
     long limit = -1;
 
     for (int i = 1; i < argc; i++)
     {
         if (strcmp(argv[i], "-s") == 0)
-            sort_mode = 1;
+            sort_mode = TRASH_LIST_SORT_SIZE;
         else if (strcmp(argv[i], "-t") == 0)
-            sort_mode = 2;
+            sort_mode = TRASH_LIST_SORT_TIME;
         else if (strcmp(argv[i], "-n") == 0)
         {
-            if (i + 1 >= argc || parse_limit(argv[i + 1], &limit) != 0)
+            if (i + 1 >= argc || trash_listing_parse_limit(argv[i + 1], &limit) != 0)
             {
                 fprintf(stderr, "list_trash: -n requires a non-negative integer\n");
                 return LIST_USAGE;
@@ -112,7 +61,11 @@ int main(int argc, char *argv[])
     }
 
     char log_path[PATH_MAX];
-    snprintf(log_path, sizeof(log_path), "%s/.trash.log", home);
+    if (trash_log_path(log_path, sizeof(log_path)) != 0)
+    {
+        fprintf(stderr, "list_trash: log path is too long\n");
+        return LIST_IO;
+    }
 
     FILE *f = fopen(log_path, "r");
     if (!f)
@@ -126,44 +79,21 @@ int main(int argc, char *argv[])
         return LIST_IO;
     }
 
-    entry_t *arr = NULL;
+    trash_log_entry_t *arr = NULL;
     size_t cap = 0, len = 0;
 
     char line[4096];
 
     while (fgets(line, sizeof(line), f))
     {
-        entry_t tmp;
-
-        char *p = strtok(line, "|");
-        if (!p)
+        trash_log_entry_t tmp;
+        if (trash_log_parse_line(line, &tmp) != 0)
             continue;
-        snprintf(tmp.original, sizeof(tmp.original), "%s", trim(p));
-
-        p = strtok(NULL, "|");
-        if (!p)
-            continue;
-        snprintf(tmp.link, sizeof(tmp.link), "%s", trim(p));
-
-        p = strtok(NULL, "|");
-        if (!p)
-            continue;
-        tmp.inode = strtoul(trim(p), NULL, 10);
-
-        p = strtok(NULL, "|");
-        if (!p)
-            continue;
-        tmp.size = atol(trim(p));
-
-        p = strtok(NULL, "|");
-        if (!p)
-            continue;
-        snprintf(tmp.timestamp, sizeof(tmp.timestamp), "%s", trim(p));
 
         if (len == cap)
         {
             cap = cap ? cap * 2 : 64;
-            entry_t *tmp_arr = realloc(arr, cap * sizeof(*arr));
+            trash_log_entry_t *tmp_arr = realloc(arr, cap * sizeof(*arr));
             if (!tmp_arr)
             {
                 fclose(f);
@@ -187,24 +117,9 @@ int main(int argc, char *argv[])
 
     fclose(f);
 
-    if (grep_pat[0])
-    {
-        size_t j = 0;
-        for (size_t i = 0; i < len; i++)
-        {
-            if (strstr(get_basename(arr[i].original), grep_pat))
-                arr[j++] = arr[i];
-        }
-        len = j;
-    }
-
-    if (sort_mode == 1)
-        qsort(arr, len, sizeof(entry_t), cmp_size);
-    else if (sort_mode == 2)
-        qsort(arr, len, sizeof(entry_t), cmp_time);
-
-    if (limit >= 0 && (size_t)limit < len)
-        len = limit;
+    len = trash_listing_filter_basename(arr, len, grep_pat);
+    trash_listing_sort(arr, len, sort_mode);
+    len = trash_listing_apply_limit(len, limit);
 
     printf("%-40s %-40s %-10s %-10s %-14s\n", "ORIGINAL_PATH", "LINK_NAME", "INODE", "SIZE", "TIMESTAMP");
 

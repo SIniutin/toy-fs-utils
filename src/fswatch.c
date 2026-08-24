@@ -1,5 +1,6 @@
 #include <sys/inotify.h>
 
+#include <stdlib.h>
 #include <stdio.h>
 #include <time.h>
 #include <unistd.h>
@@ -73,18 +74,37 @@ int main(int argc, char *argv[])
     if (wd == -1)
     {
         fprintf(stderr, "fswatch: couldn't add watch to %s\n", argv[1]);
+        if (log_file && log_file != stdout)
+            fclose(log_file);
+        close(fd);
         return 2;
     }
+
+    long max_events = -1;
+    const char *max_events_env = getenv("FSWATCH_MAX_EVENTS");
+    if (max_events_env)
+    {
+        char *end = NULL;
+        max_events = strtol(max_events_env, &end, 10);
+        if (end == max_events_env || *end != '\0' || max_events < 0)
+            max_events = -1;
+    }
+
+    long seen_events = 0;
     while (1)
     {
         char buffer[256 * (sizeof(struct inotify_event) + 16)];
-        int length = read(fd, buffer, 256 * (sizeof(struct inotify_event) + 16));
+        ssize_t length = read(fd, buffer, 256 * (sizeof(struct inotify_event) + 16));
         if (length < 0)
         {
             fputs("fswatch: failed to read inotify\n", stderr);
+            if (log_file && log_file != stdout)
+                fclose(log_file);
+            inotify_rm_watch(fd, wd);
+            close(fd);
             return 2;
         }
-        int i = 0;
+        ssize_t i = 0;
         while (i < length)
         {
             struct inotify_event *event = (struct inotify_event *)&buffer[i];
@@ -92,11 +112,18 @@ int main(int argc, char *argv[])
             snprintf(path, sizeof(path), "%s/%s", argv[1], event->name);
             const char *event_name = get_event_name(event->mask);
             fprintf(log_file, "[%s], %s, %s\n", get_current_datetime(), path, event_name);
+            fflush(log_file);
+            seen_events++;
+            if (max_events >= 0 && seen_events >= max_events)
+                goto done;
             i += sizeof(struct inotify_event) + event->len;
         }
     }
 
+done:
     inotify_rm_watch(fd, wd);
+    if (log_file && log_file != stdout)
+        fclose(log_file);
     close(fd);
     return 0;
 }

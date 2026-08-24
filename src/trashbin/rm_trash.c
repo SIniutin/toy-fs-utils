@@ -1,5 +1,6 @@
 #define _XOPEN_SOURCE 700
 
+#include "trashbin/paths.h"
 #include "utils/common.h"
 #include "utils/crawler.h"
 
@@ -50,7 +51,7 @@ static int ensure_trash_dir(char *buf, size_t buf_sz)
         return -1;
     }
 
-    if (snprintf(buf, buf_sz, "%s/.trash", home) >= (int)buf_sz)
+    if (trash_dir_path(buf, buf_sz) != 0)
     {
         fprintf(stderr, "rm_trash: trash path is too long\n");
         return -1;
@@ -86,7 +87,7 @@ static FILE *open_log(void)
     }
 
     char path[PATH_MAX];
-    if (snprintf(path, sizeof(path), "%s/.trash.log", home) >= (int)sizeof(path))
+    if (trash_log_path(path, sizeof(path)) != 0)
     {
         fprintf(stderr, "rm_trash: log path is too long\n");
         return NULL;

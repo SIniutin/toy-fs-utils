@@ -31,6 +31,7 @@ typedef struct
     unsigned regular;
     unsigned dirs;
     unsigned links;
+    unsigned fifos;
     pthread_mutex_t lock;
 } type_count_ctx_t;
 
@@ -82,6 +83,8 @@ static int count_types(const char *path, const struct stat *st, void *user_data)
         ctx->dirs++;
     else if (S_ISLNK(st->st_mode))
         ctx->links++;
+    else if (S_ISFIFO(st->st_mode))
+        ctx->fifos++;
     pthread_mutex_unlock(&ctx->lock);
 
     return CRAWL_PROC_CONTINUE;
@@ -308,6 +311,7 @@ typedef struct
     unsigned expected_regular;
     unsigned expected_dirs;
     unsigned expected_links;
+    unsigned expected_fifos;
 } type_case_t;
 
 static int run_type_case(const type_case_t *tc)
@@ -317,9 +321,12 @@ static int run_type_case(const type_case_t *tc)
 
     char target[PATH_MAX];
     char link_path[PATH_MAX];
+    char fifo_path[PATH_MAX];
     snprintf(target, sizeof(target), "%s/a.txt", root);
     snprintf(link_path, sizeof(link_path), "%s/a.link", root);
+    snprintf(fifo_path, sizeof(fifo_path), "%s/named.pipe", root);
     ASSERT_TRUE(symlink(target, link_path) == 0);
+    ASSERT_TRUE(mkfifo(fifo_path, 0600) == 0);
 
     type_count_ctx_t ctx = {0};
     ASSERT_TRUE(pthread_mutex_init(&ctx.lock, NULL) == 0);
@@ -336,6 +343,7 @@ static int run_type_case(const type_case_t *tc)
     ASSERT_TRUE(ctx.regular == tc->expected_regular);
     ASSERT_TRUE(ctx.dirs == tc->expected_dirs);
     ASSERT_TRUE(ctx.links == tc->expected_links);
+    ASSERT_TRUE(ctx.fifos == tc->expected_fifos);
 
     pthread_mutex_destroy(&ctx.lock);
     return 0;
@@ -347,6 +355,7 @@ static int test_file_type_filtering(void)
         {.name = "regular only", .file_types = CRAWL_F_REG, .expected_regular = 3, .expected_dirs = 0, .expected_links = 0},
         {.name = "directories only", .file_types = CRAWL_F_DIR, .expected_regular = 0, .expected_dirs = 2, .expected_links = 0},
         {.name = "links only", .file_types = CRAWL_F_LNK, .expected_regular = 0, .expected_dirs = 0, .expected_links = 1},
+        {.name = "fifo only", .file_types = CRAWL_F_FIFO, .expected_regular = 0, .expected_dirs = 0, .expected_links = 0, .expected_fifos = 1},
         {.name = "regular directories and links", .file_types = CRAWL_F_REG | CRAWL_F_DIR | CRAWL_F_LNK, .expected_regular = 3, .expected_dirs = 2, .expected_links = 1},
     };
 
@@ -492,6 +501,32 @@ static int test_invalid_arguments(void)
     return 0;
 }
 
+static int test_root_file_is_ignored(void)
+{
+    char root[] = "/tmp/toyfs-crawler-file.XXXXXX";
+    ASSERT_TRUE(make_tree(root) == 0);
+
+    char file_path[PATH_MAX];
+    snprintf(file_path, sizeof(file_path), "%s/a.txt", root);
+
+    count_ctx_t ctx = {0};
+    ASSERT_TRUE(pthread_mutex_init(&ctx.lock, NULL) == 0);
+
+    crawler_config_t conf = {
+        .max_threads = 2,
+        .max_depth = UINT_MAX,
+        .follow_symlinks = 0,
+        .file_types = CRAWL_F_REG,
+        .crawl_through = 1,
+    };
+
+    ASSERT_TRUE(crawl_directory(file_path, &conf, count_file, &ctx) == 0);
+    ASSERT_TRUE(ctx.count == 0);
+
+    pthread_mutex_destroy(&ctx.lock);
+    return 0;
+}
+
 int main(void)
 {
     if (test_count_table() != 0)
@@ -511,6 +546,8 @@ int main(void)
     if (test_stop_multithreaded_finishes() != 0)
         return 1;
     if (test_invalid_arguments() != 0)
+        return 1;
+    if (test_root_file_is_ignored() != 0)
         return 1;
 
     return 0;

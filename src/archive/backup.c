@@ -1,19 +1,20 @@
 #define _XOPEN_SOURCE 700
 
+#include "archive/file_ops.h"
+#include "archive/paths.h"
+#include "archive/snapshot.h"
 #include "utils/common.h"
 #include "utils/crawler.h"
 #include <sys/stat.h>
 #include <sys/types.h>
 
 #include <errno.h>
-#include <fcntl.h>
 #include <limits.h>
 #include <pthread.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
-#include <utime.h>
 
 typedef struct
 {
@@ -83,148 +84,6 @@ typedef struct
     pthread_mutex_t lock;
 } backup_ctx_t;
 
-static void get_dirname(const char *path, char *buf, size_t buflen)
-{
-    const char *p = strrchr(path, '/');
-    if (!p)
-    {
-        snprintf(buf, buflen, ".");
-        return;
-    }
-    size_t len = (size_t)(p - path);
-    if (len >= buflen)
-        len = buflen - 1;
-    memcpy(buf, path, len);
-    buf[len] = '\0';
-}
-static int write_text_file_atomic(const char *path, const char *text)
-{
-    char tmp[PATH_MAX];
-    snprintf(tmp, sizeof(tmp), "%s.tmp", path);
-
-    int fd = open(tmp, O_WRONLY | O_CREAT | O_TRUNC, 0600);
-    if (fd < 0)
-    {
-        fprintf(stderr, "backup: cannot open %s: %s\n", tmp, strerror(errno));
-        return -1;
-    }
-
-    size_t n = strlen(text);
-    ssize_t w = write(fd, text, n);
-    if (w < 0 || (size_t)w != n)
-    {
-        fprintf(stderr, "backup: write error %s: %s\n", tmp, strerror(errno));
-        close(fd);
-        unlink(tmp);
-        return -1;
-    }
-
-    if (close(fd) != 0)
-    {
-        fprintf(stderr, "backup: close error %s: %s\n", tmp, strerror(errno));
-        unlink(tmp);
-        return -1;
-    }
-
-    if (rename(tmp, path) != 0)
-    {
-        fprintf(stderr, "backup: rename(%s -> %s) failed: %s\n", tmp, path, strerror(errno));
-        unlink(tmp);
-        return -1;
-    }
-
-    return 0;
-}
-
-static int copy_file(const char *src, const char *dst, const struct stat *src_st)
-{
-    int in = open(src, O_RDONLY);
-    if (in < 0)
-    {
-        fprintf(stderr, "backup: cannot open %s: %s\n", src, strerror(errno));
-        return -1;
-    }
-    int out = open(dst, O_WRONLY | O_CREAT | O_TRUNC, 0600);
-    if (out < 0)
-    {
-        fprintf(stderr, "backup: cannot open %s: %s\n", dst, strerror(errno));
-        close(in);
-        return -1;
-    }
-
-    char buf[65536];
-    ssize_t r;
-    while ((r = read(in, buf, sizeof(buf))) > 0)
-    {
-        ssize_t off = 0;
-        while (off < r)
-        {
-            ssize_t w = write(out, buf + off, (size_t)(r - off));
-            if (w < 0)
-            {
-                fprintf(stderr, "backup: write error: %s\n", strerror(errno));
-                close(in);
-                close(out);
-                return -1;
-            }
-            off += w;
-        }
-    }
-    if (r < 0)
-    {
-        fprintf(stderr, "backup: read error: %s\n", strerror(errno));
-        close(in);
-        close(out);
-        return -1;
-    }
-
-    close(in);
-    close(out);
-
-    if (src_st)
-    {
-        struct utimbuf ut;
-        ut.actime = src_st->st_atime;
-        ut.modtime = src_st->st_mtime;
-        if (utime(dst, &ut) != 0)
-        {
-            fprintf(stderr, "backup: utime(%s) failed: %s\n", dst, strerror(errno));
-            return -1;
-        }
-    }
-
-    return 0;
-}
-
-static int is_unchanged(const struct stat *orig, const struct stat *bak)
-{
-    if (orig->st_ino == bak->st_ino && orig->st_dev == bak->st_dev)
-        return 1;
-    if (orig->st_size == bak->st_size && orig->st_mtime == bak->st_mtime)
-        return 1;
-    return 0;
-}
-
-typedef enum
-{
-    ST_NEW,
-    ST_CHANGED,
-    ST_UNCHANGED
-} file_status_t;
-
-static file_status_t compare_with_dst(const struct stat *orig, const char *dst)
-{
-    struct stat st_bak;
-    if (stat(dst, &st_bak) != 0)
-    {
-        if (errno == ENOENT)
-            return ST_NEW;
-        fprintf(stderr, "backup: stat(%s) failed: %s\n", dst, strerror(errno));
-        return ST_CHANGED;
-    }
-    return is_unchanged(orig, &st_bak) ? ST_UNCHANGED : ST_CHANGED;
-}
-
 static int process_file(const char *path, const struct stat *st, void *user_data)
 {
     backup_ctx_t *ctx = user_data;
@@ -237,22 +96,26 @@ static int process_file(const char *path, const struct stat *st, void *user_data
         rel++;
 
     char dst[PATH_MAX];
-    snprintf(dst, sizeof(dst), "%s/%s", ctx->backup_root, rel);
+    if (join_path_into(dst, sizeof(dst), ctx->backup_root, rel) != 0)
+    {
+        fprintf(stderr, "backup: destination path is too long: %s/%s\n", ctx->backup_root, rel);
+        return -1;
+    }
 
-    file_status_t stt = compare_with_dst(st, dst);
+    archive_file_status_t stt = archive_compare_with_dst(st, dst, "backup");
 
     if (ctx->check_only)
     {
         pthread_mutex_lock(&ctx->lock);
         switch (stt)
         {
-        case ST_NEW:
+        case ARCHIVE_FILE_NEW:
             strlist_push(&ctx->new_files, rel);
             break;
-        case ST_CHANGED:
+        case ARCHIVE_FILE_CHANGED:
             strlist_push(&ctx->updated_files, rel);
             break;
-        case ST_UNCHANGED:
+        case ARCHIVE_FILE_UNCHANGED:
             strlist_push(&ctx->skipped_files, rel);
             break;
         }
@@ -260,17 +123,17 @@ static int process_file(const char *path, const struct stat *st, void *user_data
         return 0;
     }
 
-    if (stt == ST_NEW)
+    if (stt == ARCHIVE_FILE_NEW)
     {
         char dirbuf[PATH_MAX];
-        get_dirname(dst, dirbuf, sizeof(dirbuf));
+        archive_dirname(dst, dirbuf, sizeof(dirbuf));
         if (mkdir_p(dirbuf, 0755) != 0)
         {
             fprintf(stderr, "backup: cannot create %s\n", dirbuf);
             return -1;
         }
 
-        if (copy_file(path, dst, st) != 0)
+        if (archive_copy_file(path, dst, st, "backup") != 0)
             return -1;
 
         pthread_mutex_lock(&ctx->lock);
@@ -278,42 +141,33 @@ static int process_file(const char *path, const struct stat *st, void *user_data
         strlist_push(&ctx->new_files, rel);
         pthread_mutex_unlock(&ctx->lock);
     }
-    else if (stt == ST_CHANGED)
+    else if (stt == ARCHIVE_FILE_CHANGED)
     {
         char versions_dir[PATH_MAX];
-        snprintf(versions_dir, sizeof(versions_dir), "%s/.versions", ctx->backup_root);
+        if (archive_versions_dir(versions_dir, sizeof(versions_dir), ctx->backup_root) != 0)
+        {
+            fprintf(stderr, "backup: versions path is too long: %s/.versions\n", ctx->backup_root);
+            return -1;
+        }
         if (mkdir_p(versions_dir, 0755) != 0)
         {
             fprintf(stderr, "backup: cannot create %s\n", versions_dir);
             return -1;
         }
 
-        char base_ver_path[PATH_MAX];
-        snprintf(base_ver_path, sizeof(base_ver_path), "%s/%s@%s", versions_dir, rel, ctx->datetime);
+        char ver_path[PATH_MAX];
+        if (archive_version_path(ctx->backup_root, rel, ctx->datetime, ver_path, sizeof(ver_path)) != 0)
+        {
+            fprintf(stderr, "backup: version path is too long: %s/%s@%s\n", versions_dir, rel, ctx->datetime);
+            return -1;
+        }
 
         char ver_dir[PATH_MAX];
-        get_dirname(base_ver_path, ver_dir, sizeof(ver_dir));
+        archive_dirname(ver_path, ver_dir, sizeof(ver_dir));
         if (mkdir_p(ver_dir, 0755) != 0)
         {
             fprintf(stderr, "backup: cannot create %s\n", ver_dir);
             return -1;
-        }
-
-        char ver_path[PATH_MAX];
-        struct stat tmp;
-        int idx = 0;
-        for (;;)
-        {
-            if (idx == 0)
-                snprintf(ver_path, sizeof(ver_path), "%s", base_ver_path);
-            else
-                snprintf(ver_path, sizeof(ver_path), "%s.%d", base_ver_path, idx);
-
-            if (stat(ver_path, &tmp) != 0)
-            {
-                break;
-            }
-            idx++;
         }
 
         if (rename(dst, ver_path) != 0)
@@ -323,14 +177,14 @@ static int process_file(const char *path, const struct stat *st, void *user_data
         }
 
         char dirbuf[PATH_MAX];
-        get_dirname(dst, dirbuf, sizeof(dirbuf));
+        archive_dirname(dst, dirbuf, sizeof(dirbuf));
         if (mkdir_p(dirbuf, 0755) != 0)
         {
             fprintf(stderr, "backup: cannot create %s\n", dirbuf);
             return -1;
         }
 
-        if (copy_file(path, dst, st) != 0)
+        if (archive_copy_file(path, dst, st, "backup") != 0)
             return -1;
 
         pthread_mutex_lock(&ctx->lock);
@@ -417,7 +271,11 @@ int main(int argc, char *argv[])
     date_only[10] = '\0';
 
     char src_copy[PATH_MAX];
-    snprintf(src_copy, sizeof(src_copy), "%s", src_real);
+    if (snprintf_checked(src_copy, sizeof(src_copy), "%s", src_real) != 0)
+    {
+        fprintf(stderr, "backup: source path is too long\n");
+        return 1;
+    }
     size_t l = strlen(src_copy);
     while (l > 1 && src_copy[l - 1] == '/')
     {
@@ -427,7 +285,11 @@ int main(int argc, char *argv[])
     const char *src_base = get_basename(src_copy);
 
     char backups_root[PATH_MAX];
-    snprintf(backups_root, sizeof(backups_root), "%s/Backups", home);
+    if (archive_backups_dir(backups_root, sizeof(backups_root)) != 0)
+    {
+        fprintf(stderr, "backup: Backups path is too long\n");
+        return 1;
+    }
     if (!check_only)
     {
         if (mkdir_p(backups_root, 0755) != 0)
@@ -438,7 +300,11 @@ int main(int argc, char *argv[])
     }
 
     char backup_root[PATH_MAX];
-    snprintf(backup_root, sizeof(backup_root), "%s/%s-%s", backups_root, src_base, date_only);
+    if (snprintf_checked(backup_root, sizeof(backup_root), "%s/%s-%s", backups_root, src_base, date_only) != 0)
+    {
+        fprintf(stderr, "backup: backup path is too long: %s/%s-%s\n", backups_root, src_base, date_only);
+        return 1;
+    }
 
     if (!check_only)
     {
@@ -449,7 +315,11 @@ int main(int argc, char *argv[])
         }
 
         char versions_dir[PATH_MAX];
-        snprintf(versions_dir, sizeof(versions_dir), "%s/.versions", backup_root);
+        if (archive_versions_dir(versions_dir, sizeof(versions_dir), backup_root) != 0)
+        {
+            fprintf(stderr, "backup: versions path is too long: %s/.versions\n", backup_root);
+            return 1;
+        }
         if (mkdir_p(versions_dir, 0755) != 0)
         {
             fprintf(stderr, "backup: cannot create %s\n", versions_dir);
@@ -459,12 +329,20 @@ int main(int argc, char *argv[])
     if (!check_only)
     {
         char spath[PATH_MAX];
-        snprintf(spath, sizeof(spath), "%s/.source_path", backup_root);
+        if (archive_source_path_file(spath, sizeof(spath), backup_root) != 0)
+        {
+            fprintf(stderr, "backup: source path metadata path is too long: %s/.source_path\n", backup_root);
+            return 1;
+        }
 
-        char line[PATH_MAX + 4];
-        snprintf(line, sizeof(line), "SOURCE=%s\n", src_real);
+        char line[PATH_MAX + 16];
+        if (snprintf_checked(line, sizeof(line), "SOURCE=%s\n", src_real) != 0)
+        {
+            fprintf(stderr, "backup: source path metadata is too long\n");
+            return 1;
+        }
 
-        if (write_text_file_atomic(spath, line) != 0)
+        if (archive_write_text_file_atomic(spath, line, "backup") != 0)
         {
             fprintf(stderr, "backup: warning: failed to write .source_path\n");
         }
@@ -472,16 +350,29 @@ int main(int argc, char *argv[])
 
     backup_ctx_t ctx;
     memset(&ctx, 0, sizeof(ctx));
-    snprintf(ctx.src_root, sizeof(ctx.src_root), "%s", src_real);
-    ctx.src_root_len = strlen(ctx.src_root);
-    snprintf(ctx.backup_root, sizeof(ctx.backup_root), "%s", backup_root);
-    snprintf(ctx.datetime, sizeof(ctx.datetime), "%s", timebuf);
-    ctx.check_only = check_only;
-    ctx.compress = compress;
     strlist_init(&ctx.new_files);
     strlist_init(&ctx.updated_files);
     strlist_init(&ctx.skipped_files);
-    pthread_mutex_init(&ctx.lock, NULL);
+    if (pthread_mutex_init(&ctx.lock, NULL) != 0)
+    {
+        fprintf(stderr, "backup: mutex initialization failed\n");
+        return 1;
+    }
+
+    if (snprintf_checked(ctx.src_root, sizeof(ctx.src_root), "%s", src_real) != 0 ||
+        snprintf_checked(ctx.backup_root, sizeof(ctx.backup_root), "%s", backup_root) != 0 ||
+        snprintf_checked(ctx.datetime, sizeof(ctx.datetime), "%s", timebuf) != 0)
+    {
+        fprintf(stderr, "backup: internal path buffer is too small\n");
+        pthread_mutex_destroy(&ctx.lock);
+        strlist_free(&ctx.new_files);
+        strlist_free(&ctx.updated_files);
+        strlist_free(&ctx.skipped_files);
+        return 1;
+    }
+    ctx.src_root_len = strlen(ctx.src_root);
+    ctx.check_only = check_only;
+    ctx.compress = compress;
 
     crawler_config_t conf = { .max_threads = 4, .follow_symlinks = 0, .max_depth = UINT_MAX, .file_types = CRAWL_F_REG, .crawl_through = 1 };
 
@@ -517,7 +408,11 @@ int main(int argc, char *argv[])
     if (compress)
     {
         char versions_dir[PATH_MAX];
-        snprintf(versions_dir, sizeof(versions_dir), "%s/.versions", ctx.backup_root);
+        if (archive_versions_dir(versions_dir, sizeof(versions_dir), ctx.backup_root) != 0)
+        {
+            fprintf(stderr, "backup: versions path is too long: %s/.versions\n", ctx.backup_root);
+            return 1;
+        }
         struct stat stv;
         if (stat(versions_dir, &stv) == 0 && S_ISDIR(stv.st_mode))
         {

@@ -8,6 +8,8 @@
 #include <dirent.h>
 #include <errno.h>
 #include <limits.h>
+#include <stdarg.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
@@ -67,6 +69,29 @@ char *join_path(const char *path, const char *name)
     strcat(new_path, "/");
     strcat(new_path, name);
     return new_path;
+}
+
+int snprintf_checked(char *out, size_t outsz, const char *fmt, ...)
+{
+    if (!out || outsz == 0 || !fmt)
+        return -1;
+
+    va_list ap;
+    va_start(ap, fmt);
+    int n = vsnprintf(out, outsz, fmt, ap);
+    va_end(ap);
+
+    if (n < 0 || (size_t)n >= outsz)
+    {
+        out[0] = '\0';
+        return -1;
+    }
+    return 0;
+}
+
+int join_path_into(char *out, size_t outsz, const char *path, const char *name)
+{
+    return snprintf_checked(out, outsz, "%s/%s", path, name);
 }
 
 const char *get_basename(const char *path)

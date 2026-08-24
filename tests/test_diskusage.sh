@@ -23,12 +23,15 @@ run_status_case() {
 }
 
 run_status_case "diskusage-missing" 1 "$bin_dir/diskusage" "$work/missing"
+run_status_case "diskusage-usage" 1 "$bin_dir/diskusage"
 
 mkdir -p "$work/sub"
 printf alpha >"$work/a.txt"
 printf beta >"$work/sub/b.log"
 printf gamma >"$work/sub/c.tmp"
 printf hide >"$work/.hidden"
+
+run_status_case "diskusage-file-input" 1 "$bin_dir/diskusage" "$work/a.txt"
 
 "$bin_dir/diskusage" "$work" >"/tmp/toyfs-diskusage.out"
 
@@ -42,3 +45,13 @@ grep -q "Logs: 4 B" "/tmp/toyfs-diskusage.out"
 grep -q "Temp: 5 B" "/tmp/toyfs-diskusage.out"
 grep -q "Hidden: 4 B" "/tmp/toyfs-diskusage.out"
 grep -q "Total: 18 B" "/tmp/toyfs-diskusage.out"
+
+wide="$(mktemp -d /tmp/toyfs-diskusage-wide.XXXXXX)"
+for i in {1..12}; do
+    printf '%*s' "$i" '' | tr ' ' x >"$wide/file_$i.bin"
+done
+
+"$bin_dir/diskusage" "$wide" >"/tmp/toyfs-diskusage-wide.out"
+grep -q "Files: 12" "/tmp/toyfs-diskusage-wide.out"
+grep -q "file_12.bin (12 B)" "/tmp/toyfs-diskusage-wide.out"
+grep -q "Total: 78 B" "/tmp/toyfs-diskusage-wide.out"

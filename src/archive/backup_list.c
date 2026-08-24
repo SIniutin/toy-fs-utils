@@ -1,5 +1,8 @@
 #define _XOPEN_SOURCE 700
 
+#include "archive/paths.h"
+#include "utils/common.h"
+
 #include <sys/stat.h>
 
 #include <ctype.h>
@@ -48,7 +51,8 @@ static int scan_total(const char *path, long long *total)
             continue;
 
         char child[PATH_MAX];
-        snprintf(child, sizeof(child), "%s/%s", path, ent->d_name);
+        if (join_path_into(child, sizeof(child), path, ent->d_name) != 0)
+            continue;
 
         struct stat st;
         if (lstat(child, &st) != 0)
@@ -84,7 +88,8 @@ static int scan_files_without_versions(const char *path, long *count)
             continue;
 
         char child[PATH_MAX];
-        snprintf(child, sizeof(child), "%s/%s", path, ent->d_name);
+        if (join_path_into(child, sizeof(child), path, ent->d_name) != 0)
+            continue;
 
         struct stat st;
         if (lstat(child, &st) != 0)
@@ -117,7 +122,8 @@ static int scan_versions(const char *path, long *count)
             continue;
 
         char child[PATH_MAX];
-        snprintf(child, sizeof(child), "%s/%s", path, ent->d_name);
+        if (join_path_into(child, sizeof(child), path, ent->d_name) != 0)
+            continue;
 
         struct stat st;
         if (lstat(child, &st) != 0)
@@ -224,7 +230,11 @@ int main(int argc, char *argv[])
     }
 
     char backups_dir[PATH_MAX];
-    snprintf(backups_dir, sizeof(backups_dir), "%s/Backups", home);
+    if (archive_backups_dir(backups_dir, sizeof(backups_dir)) != 0)
+    {
+        fprintf(stderr, "backup_list: Backups path is too long\n");
+        return 1;
+    }
 
     if (!ensure_is_dir(backups_dir))
     {
@@ -249,7 +259,11 @@ int main(int argc, char *argv[])
             continue;
 
         char bpath[PATH_MAX];
-        snprintf(bpath, sizeof(bpath), "%s/%s", backups_dir, ent->d_name);
+        if (join_path_into(bpath, sizeof(bpath), backups_dir, ent->d_name) != 0)
+        {
+            fprintf(stderr, "backup_list: backup path is too long: %s/%s\n", backups_dir, ent->d_name);
+            continue;
+        }
 
         struct stat st;
         if (stat(bpath, &st) != 0 || !S_ISDIR(st.st_mode))
@@ -280,7 +294,11 @@ int main(int argc, char *argv[])
         info->files = files;
 
         char vdir[PATH_MAX];
-        snprintf(vdir, sizeof(vdir), "%s/.versions", bpath);
+        if (archive_versions_dir(vdir, sizeof(vdir), bpath) != 0)
+        {
+            fprintf(stderr, "backup_list: versions path is too long: %s/.versions\n", bpath);
+            continue;
+        }
         long versions = 0;
         if (ensure_is_dir(vdir))
         {
