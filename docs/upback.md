@@ -13,7 +13,7 @@ upback [--to DIR] BACKUP_NAME
 ## Options
 
 - `--to DIR` - restore into `DIR` instead of the original source path recorded
-  in `.source_path`.
+  in `.source_path`. If `DIR` already exists, it must be a directory.
 
 ## Behavior
 
@@ -21,6 +21,7 @@ upback [--to DIR] BACKUP_NAME
 - Skips `.versions` and `versions.tar.gz`.
 - Recreates destination directories as needed.
 - Prompts before overwriting an existing destination file.
+- Fails if the restore root resolves to an existing non-directory path.
 
 If `--to` is not provided, `upback` reads:
 

@@ -97,7 +97,7 @@ test "$(cat "$restore_new/a.txt")" = "alpha"
 test "$(cat "$restore_new/sub/b.txt")" = "beta"
 
 restore_file="$(mktemp /tmp/toyfs-upback-file.XXXXXX)"
-run_status_case "upback-dest-is-file" 0 env HOME="$tmp_home" "$bin_dir/upback" --to "$restore_file" "$backup_name"
+run_status_case "upback-dest-is-file" 1 env HOME="$tmp_home" "$bin_dir/upback" --to "$restore_file" "$backup_name"
 run_status_case "upback-bad-to-parent" 1 env HOME="$tmp_home" "$bin_dir/upback" --to "/dev/null/child" "$backup_name"
 
 printf 'n\nn\n' | HOME="$tmp_home" "$bin_dir/upback" "$backup_name" >"/tmp/toyfs-upback-skip.out"

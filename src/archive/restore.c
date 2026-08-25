@@ -7,7 +7,14 @@
 #include <limits.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/stat.h>
 #include <unistd.h>
+
+static int path_is_dir(const char *path)
+{
+    struct stat st;
+    return path && stat(path, &st) == 0 && S_ISDIR(st.st_mode);
+}
 
 int archive_restore_should_skip_rel(const char *rel)
 {
@@ -30,12 +37,12 @@ int archive_restore_resolve_dest_root(const char *backup_root, const char *to_di
     if (to_dir && to_dir[0])
     {
         if (realpath(to_dir, out))
-            return 0;
+            return path_is_dir(out) ? 0 : -1;
         if (snprintf_checked(out, outsz, "%s", to_dir) != 0)
             return -1;
         if (mkdir_p(out, 0755) != 0)
             return -1;
-        return realpath(out, out) ? 0 : -1;
+        return realpath(out, out) && path_is_dir(out) ? 0 : -1;
     }
 
     char src_restore[PATH_MAX];
@@ -47,9 +54,11 @@ int archive_restore_resolve_dest_root(const char *backup_root, const char *to_di
         if (mkdir_p(src_restore, 0755) != 0 || !realpath(src_restore, out))
             return -1;
     }
+    if (!path_is_dir(out))
+        return -1;
     if (mkdir_p(out, 0755) != 0)
         return -1;
-    return realpath(out, out) ? 0 : -1;
+    return realpath(out, out) && path_is_dir(out) ? 0 : -1;
 }
 
 int archive_restore_dest_path(const char *dest_root, const char *rel, char *out, size_t outsz)

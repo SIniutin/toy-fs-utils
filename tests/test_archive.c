@@ -266,6 +266,15 @@ static int test_archive_restore_dest_dirs(void)
     ASSERT_TRUE(strcmp(out, explicit_dir) == 0);
     ASSERT_TRUE(access(explicit_dir, F_OK) == 0);
 
+    char explicit_file[PATH_MAX];
+    ASSERT_TRUE(join_path_into(explicit_file, sizeof(explicit_file), root, "not-a-dir") == 0);
+    ASSERT_TRUE(write_text(explicit_file, "x") == 0);
+    ASSERT_TRUE(archive_restore_resolve_dest_root(backup_root, explicit_file, out, sizeof(out)) != 0);
+
+    ASSERT_TRUE(snprintf_checked(line, sizeof(line), "SOURCE=%s\n", explicit_file) == 0);
+    ASSERT_TRUE(archive_write_text_file_atomic(source_file, line, "test_archive") == 0);
+    ASSERT_TRUE(archive_restore_resolve_dest_root(backup_root, "", out, sizeof(out)) != 0);
+
     char nested_file[PATH_MAX];
     ASSERT_TRUE(join_path_into(nested_file, sizeof(nested_file), root, "parent/child/file.txt") == 0);
     ASSERT_TRUE(archive_restore_ensure_parent_dir(nested_file) == 0);
