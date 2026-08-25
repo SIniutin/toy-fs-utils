@@ -107,8 +107,6 @@ int main(int argc, char *argv[])
     printf("---------------------------------------\n");
     printf("Total: %llu B\n", stats->total_size);
     printf("=======================================\n");
-    printf("||        prod. by * p0tniy_Zadr     ||\n");
-    printf("=======================================\n");
 
     free_min_heap(stats->top_files);
     pthread_mutex_destroy(&stats->mutex);

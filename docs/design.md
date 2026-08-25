@@ -24,6 +24,9 @@ Lifecycle:
 - `queue_cancel` wakes waiters and makes push/pop return `QUEUE_CANCELLED`.
 - `free_queue` is valid after normal drain, close, or cancel.
 
+`free_queue` must be called only after all producer and consumer threads have
+stopped using the queue. It is a destructor, not a concurrent shutdown API.
+
 ## Crawler Task Ownership
 
 Each `task_t` owns its `path`.

@@ -308,43 +308,18 @@ int crawl_directory_q(queue_t *q, const char *root_path, const crawler_config_t 
     }
 
     pthread_mutex_t state_mt;
-    pthread_mutex_init(&state_mt, NULL);
+    if (pthread_mutex_init(&state_mt, NULL) != 0)
+    {
+        free(ctx);
+        free(workers);
+        return -1;
+    }
     int active_tasks = 1; // root task
     int stopping = 0;
     int result = 0;
     visited_dir_t *visited = NULL;
     size_t visited_count = 0;
     size_t visited_cap = 0;
-
-    task_t *root_task = malloc(sizeof(task_t));
-    if (!root_task)
-    {
-        pthread_mutex_destroy(&state_mt);
-        free(ctx);
-        free(workers);
-        return -1;
-    }
-
-    root_task->depth = 0;
-    root_task->path = strdup(root_path);
-    if (!root_task->path)
-    {
-        free(root_task);
-        pthread_mutex_destroy(&state_mt);
-        free(ctx);
-        free(workers);
-        return -1;
-    }
-
-    if (queue_push(q, root_task) != QUEUE_OK)
-    {
-        free(root_task->path);
-        free(root_task);
-        pthread_mutex_destroy(&state_mt);
-        free(ctx);
-        free(workers);
-        return -1;
-    }
 
     ctx->q = q;
     ctx->conf = config;
@@ -366,8 +341,55 @@ int crawl_directory_q(queue_t *q, const char *root_path, const crawler_config_t 
         else
         {
             fprintf(stderr, "failed to create thread %zu of %u\n", i, config->max_threads);
-            break;    // if couldn't create one thread it low possible to create next
+            break;
         }
+    }
+
+    if (created == 0)
+    {
+        queue_close(q);
+        pthread_mutex_destroy(&state_mt);
+        free(ctx);
+        free(workers);
+        return -1;
+    }
+
+    task_t *root_task = malloc(sizeof(task_t));
+    if (!root_task)
+    {
+        request_stop(ctx, -1);
+        for (size_t i = 0; i < created; i++)
+            pthread_join(workers[i], NULL);
+        pthread_mutex_destroy(&state_mt);
+        free(ctx);
+        free(workers);
+        return -1;
+    }
+
+    root_task->depth = 0;
+    root_task->path = strdup(root_path);
+    if (!root_task->path)
+    {
+        free(root_task);
+        request_stop(ctx, -1);
+        for (size_t i = 0; i < created; i++)
+            pthread_join(workers[i], NULL);
+        pthread_mutex_destroy(&state_mt);
+        free(ctx);
+        free(workers);
+        return -1;
+    }
+
+    if (queue_push(q, root_task) != QUEUE_OK)
+    {
+        free_task(root_task);
+        request_stop(ctx, -1);
+        for (size_t i = 0; i < created; i++)
+            pthread_join(workers[i], NULL);
+        pthread_mutex_destroy(&state_mt);
+        free(ctx);
+        free(workers);
+        return -1;
     }
 
     for (size_t i = 0; i < created; i++)

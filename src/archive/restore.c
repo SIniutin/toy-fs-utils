@@ -16,6 +16,14 @@ static int path_is_dir(const char *path)
     return path && stat(path, &st) == 0 && S_ISDIR(st.st_mode);
 }
 
+static int resolve_dir_into(const char *path, char *out, size_t outsz)
+{
+    char resolved[PATH_MAX];
+    if (!realpath(path, resolved) || !path_is_dir(resolved))
+        return -1;
+    return snprintf_checked(out, outsz, "%s", resolved);
+}
+
 int archive_restore_should_skip_rel(const char *rel)
 {
     if (!rel || rel[0] == '\0')
@@ -42,7 +50,7 @@ int archive_restore_resolve_dest_root(const char *backup_root, const char *to_di
             return -1;
         if (mkdir_p(out, 0755) != 0)
             return -1;
-        return realpath(out, out) && path_is_dir(out) ? 0 : -1;
+        return resolve_dir_into(out, out, outsz);
     }
 
     char src_restore[PATH_MAX];
@@ -58,7 +66,7 @@ int archive_restore_resolve_dest_root(const char *backup_root, const char *to_di
         return -1;
     if (mkdir_p(out, 0755) != 0)
         return -1;
-    return realpath(out, out) && path_is_dir(out) ? 0 : -1;
+    return resolve_dir_into(out, out, outsz);
 }
 
 int archive_restore_dest_path(const char *dest_root, const char *rel, char *out, size_t outsz)
