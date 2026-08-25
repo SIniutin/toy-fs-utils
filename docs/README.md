@@ -20,3 +20,16 @@ This directory documents the user-facing utilities in the repository.
 ```
 
 Built binaries are written to `build/bin/`.
+
+## Tests
+
+```bash
+ctest --test-dir build --output-on-failure
+```
+
+For an isolated Linux run:
+
+```bash
+docker build -f tests/Dockerfile -t toyfs-tests .
+docker run --rm toyfs-tests
+```

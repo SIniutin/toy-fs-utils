@@ -6,6 +6,8 @@ set(CMAKE_C_STANDARD_REQUIRED ON)
 
 enable_testing()
 
+option(BUILD_BENCHMARKS "Build benchmark binaries" OFF)
+
 set(CMAKE_C_FLAGS_DEBUG "${CMAKE_C_FLAGS_DEBUG} -g -O0")
 set(CMAKE_C_FLAGS_RELEASE "${CMAKE_C_FLAGS_RELEASE} -O3 -DNDEBUG")
 
@@ -204,3 +206,11 @@ add_test(
     NAME fswatch_e2e
     COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_fswatch.sh ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}
 )
+
+if(BUILD_BENCHMARKS)
+    add_executable(bench_crawler bench/bench_crawler.c)
+    target_include_directories(bench_crawler PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/include
+    )
+    target_link_libraries(bench_crawler PRIVATE crawler queue utils)
+endif()

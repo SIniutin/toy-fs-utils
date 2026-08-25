@@ -58,3 +58,6 @@ TODO.md
 PLAN.md
 
 build/
+build_bench/
+bench_results/
+bench_results*/

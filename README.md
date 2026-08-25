@@ -1,61 +1,82 @@
 # Toy-fs-utils
 
 A collection of small utilities for Linux/Unix systems, written in pure C.
-The main focus of the project is a high-performance concurrent directory crawler.
-The current branch focuses on stabilizing the queue/crawler contracts and the
-utilities built on top of them.
+The project centers on a reusable pthread-based directory crawler and the
+filesystem tools built around it.
 
 ## Motivation
 
 File system traversal looks trivial until it needs to be fast, scalable, and safe.
-This project was created to explore different concurrency patterns for directory
-crawling, understand their trade-offs, and measure real performance differences
-under various workloads.
-
-The utilities in this repository serve both as practical tools and as experiments
-in concurrent programming and systems-level design.
+This project explores concurrent crawling, explicit queue/cancellation contracts,
+and practical POSIX filesystem workflows.
 
 ## Utilities
 
 ### diskusage
 
-Concurrent disk usage analyzer with an emphasis on directory traversal performance.
+Concurrent disk usage analyzer with an emphasis on directory traversal behavior.
 
 ### trashbin
 
-Safe file removal utility that moves files to a trash directory instead of deleting
-them permanently.
+Safe file removal utilities that move files to a trash directory instead of
+deleting them permanently.
 
 Features:
-- Restore (untrash) files and directories
-- List trashbin contents and statistics
+- `rm_trash` moves files into `~/.trash` and records metadata in `~/.trash.log`.
+- `list_trash` lists recorded trash entries.
+- `untrash` restores matching entries.
 
 ### fswatch
 
-File system watcher for tracking changes in directories and files.
+Inotify-based filesystem watcher for tracking changes in directories and files.
 
 ### backup
 
-Simple backup utility for copying and synchronizing directories.
+Simple backup utilities for copying, listing, and restoring directory backups.
 
 Features:
-- Multiple backup snapshots
-- Listing and managing existing backups
+- `backup` creates or updates backups under `~/Backups`.
+- `backup_list` lists available backups.
+- `upback` restores a backup into the original source path or a custom directory.
 
 ## Directory Crawler
 
-The directory crawler is the core component of the project.
-It is designed to traverse large directory trees efficiently while keeping resource
-usage predictable.
-
-The crawler is reused across utilities such as `diskusage`, `trashbin`, and
-`backup` through a shared callback interface.
+The directory crawler is the core component of the project. It traverses
+directory trees with a bounded task queue, worker threads, active-task tracking,
+and callback-driven processing.
 
 Key aspects:
-- Configurable worker pool size (defined at compile time via constants)
 - Bounded ring-buffer task queue
-- Graceful cancellation and error propagation
-- Minimal synchronization overhead
+- Graceful close/cancel behavior
+- Worker lifecycle based on active directory tasks
+- Callback-driven traversal control and error propagation
+
+## Build
+
+```bash
+./build.sh
+```
+
+Built binaries are written to `build/bin/`.
+
+## Tests
+
+The repository uses CTest for unit and end-to-end tests. Tests run against
+temporary directories and temporary `$HOME` values.
+
+```bash
+ctest --test-dir build --output-on-failure
+```
+
+Docker can be used for a clean Linux test environment:
+
+```bash
+docker build -f tests/Dockerfile -t toyfs-tests .
+docker run --rm toyfs-tests
+```
+
+Coverage is measured with gcov in a separate coverage build. The current
+source-only line coverage target is around 80%.
 
 ## Documentation
 
@@ -63,17 +84,17 @@ User-facing utility documentation lives in [`docs/`](docs/README.md).
 
 ## Benchmarks
 
-Benchmarks are planned after the core contracts are covered by tests.
-Planned measurements include:
-- Total traversal time
-- CPU utilization
-- Memory consumption
-- Scalability with respect to the number of workers
-
-## Tests
-
-Unit tests and concurrency stress tests are planned next. The immediate target is
-to cover the queue, crawler, and a trash end-to-end flow.
+Opt-in crawler benchmarks live in [`bench/`](bench/README.md). They are built
+separately from the default test flow:
 
 ```bash
-ctest
+cmake -S . -B build_bench -DCMAKE_BUILD_TYPE=Release -DBUILD_BENCHMARKS=ON
+cmake --build build_bench
+```
+
+Current measurements include:
+- Total traversal time
+- Throughput
+- CPU utilization
+- Context switches
+- Scalability across worker counts
