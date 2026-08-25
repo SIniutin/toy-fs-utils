@@ -14,30 +14,6 @@
 #include <string.h>
 #include <time.h>
 
-// char *get_current_datetime()
-// {
-//     static char buffer[20];
-//     time_t rawtime;
-//     struct tm *timeinfo;
-
-//     time(&rawtime);
-//     timeinfo = localtime(&rawtime);
-
-//     strftime(buffer, sizeof(buffer), "%Y-%m-%d %H:%M", timeinfo);
-//     return buffer;
-// }
-
-// void get_current_datetime(char *buffer, size_t sz)
-// {
-//     time_t rawtime = time(NULL);
-//     struct tm *timeinfo = localtime(&rawtime);
-//     if (!timeinfo) {
-//         if (sz > 0) buffer[0] = '\0';
-//         return;
-//     }
-//     strftime(buffer, sz, "%Y-%m-%d %H:%M", timeinfo);
-// }
-
 void get_current_datetime(char *buffer, size_t sz)
 {
     if (!buffer || sz == 0)
@@ -52,8 +28,7 @@ void get_current_datetime(char *buffer, size_t sz)
         return;
     }
 
-    // РОВНО тот формат, который требуют тесты:
-    // YYYY-mm-dd_HH-MM-SS
+    // Stable timestamp format used in generated filenames.
     strftime(buffer, sz, "%Y-%m-%d_%H-%M-%S", timeinfo);
 }
 
@@ -107,7 +82,6 @@ static int ensure_dir(const char *path, mode_t mode)
     {
         if (!S_ISDIR(st.st_mode))
         {
-            // fprintf(stderr, "upback: %s exists and is not a directory\n", path);
             return -1;
         }
         return 0;
@@ -116,7 +90,6 @@ static int ensure_dir(const char *path, mode_t mode)
     {
         if (errno == EEXIST)
             return 0;
-        // perror("upback: mkdir");
         return -1;
     }
     return 0;

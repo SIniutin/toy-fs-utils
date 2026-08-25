@@ -146,14 +146,14 @@ int process_file(const char *path, const struct stat *st, void *user_data)
     if (snprintf(link_name, sizeof(link_name), "%s@%s@%lu", name, timebuf, (unsigned long)st->st_ino) >= (int)sizeof(link_name))
     {
         fprintf(stderr, "rm_trash: link name for \"%s\" is too long\n", path);
-        return 0;
+        return CRAWL_PROC_ERROR;
     }
 
     char dst_path[PATH_MAX];
     if (snprintf(dst_path, sizeof(dst_path), "%s/%s", data->trash_dir, link_name) >= (int)sizeof(dst_path))
     {
         fprintf(stderr, "rm_trash: trash path for \"%s\" is too long\n", path);
-        return 0;
+        return CRAWL_PROC_ERROR;
     }
 
     if (data->verbose)
@@ -162,7 +162,7 @@ int process_file(const char *path, const struct stat *st, void *user_data)
     if (link(path, dst_path) != 0)
     {
         fprintf(stderr, "rm_trash: failed to link \"%s\" -> \"%s\": %s\n", dst_path, path, strerror(errno));
-        return 0;
+        return CRAWL_PROC_ERROR;
     }
 
     pthread_mutex_lock(&data->log_lock);
@@ -179,6 +179,7 @@ int process_file(const char *path, const struct stat *st, void *user_data)
     if (unlink(path) != 0)
     {
         fprintf(stderr, "rm_trash: failed to unlink \"%s\": %s\n", path, strerror(errno));
+        return CRAWL_PROC_ERROR;
     }
 
     return 0;
@@ -272,7 +273,7 @@ int main(int argc, char *argv[])
                 fprintf(stdout, "rm_trash: crawling directory \"%s\"\n", p);
 
             if (crawl_directory(p, &config, process_file, &data) != 0)
-                exit_status = RM_TRASH_INTERNAL;
+                exit_status = RM_TRASH_IO;
         }
         else
         {

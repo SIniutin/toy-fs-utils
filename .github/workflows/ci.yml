@@ -1,0 +1,77 @@
+name: CI
+
+on:
+  push:
+    branches: [dev, main]
+  pull_request:
+    branches: [dev, main]
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install dependencies
+        run: sudo apt-get update && sudo apt-get install -y cmake gcc
+      - name: Configure
+        run: cmake -S . -B build -DCMAKE_C_COMPILER=gcc
+      - name: Build
+        run: cmake --build build
+      - name: Test
+        run: ctest --test-dir build --output-on-failure
+
+  warning-build:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install dependencies
+        run: sudo apt-get update && sudo apt-get install -y cmake gcc
+      - name: Configure
+        run: >
+          cmake -S . -B build_warn
+          -DCMAKE_C_COMPILER=gcc
+          -DCMAKE_BUILD_TYPE=Debug
+          -DCMAKE_C_FLAGS="-Wall -Wextra -Wpedantic -Werror"
+      - name: Build
+        run: cmake --build build_warn
+
+  asan-ubsan:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install dependencies
+        run: sudo apt-get update && sudo apt-get install -y cmake clang
+      - name: Configure
+        run: >
+          cmake -S . -B build_asan
+          -DCMAKE_C_COMPILER=clang
+          -DCMAKE_BUILD_TYPE=Debug
+          -DCMAKE_C_FLAGS="-fsanitize=address,undefined -fno-omit-frame-pointer -g"
+          -DCMAKE_EXE_LINKER_FLAGS="-fsanitize=address,undefined"
+      - name: Build
+        run: cmake --build build_asan
+      - name: Test
+        env:
+          ASAN_OPTIONS: detect_leaks=0:strict_string_checks=1
+          UBSAN_OPTIONS: print_stacktrace=1
+        run: ctest --test-dir build_asan --output-on-failure
+
+  tsan-crawler:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install dependencies
+        run: sudo apt-get update && sudo apt-get install -y cmake clang
+      - name: Configure
+        run: >
+          cmake -S . -B build_tsan
+          -DCMAKE_C_COMPILER=clang
+          -DCMAKE_BUILD_TYPE=Debug
+          -DCMAKE_C_FLAGS="-fsanitize=thread -fno-omit-frame-pointer -g"
+          -DCMAKE_EXE_LINKER_FLAGS="-fsanitize=thread"
+      - name: Build
+        run: cmake --build build_tsan --target test_queue test_crawler
+      - name: Test queue/crawler under ThreadSanitizer
+        env:
+          TSAN_OPTIONS: halt_on_error=1:second_deadlock_stack=1
+        run: ctest --test-dir build_tsan --output-on-failure -R '^(queue|crawler)$'

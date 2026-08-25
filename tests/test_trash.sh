@@ -105,6 +105,11 @@ rm -f "$tmp_home/.trash/$trash_link"
 run_status_case "untrash missing trash source" 2 bash -c "printf 'y\n' | HOME='$tmp_home' '$bin_dir/untrash' 'missing-source.txt'"
 
 if [ -d /dev/shm ] && [ -w /dev/shm ]; then
+    cross_src="$(mktemp -d /dev/shm/toyfs-rm-cross.XXXXXX)"
+    printf cannot-link > "$cross_src/cannot-link.txt"
+    run_status_case "rm_trash reports cross-device link failure" 2 env HOME="$tmp_home" "$bin_dir/rm_trash" "$cross_src/cannot-link.txt"
+    test -e "$cross_src/cannot-link.txt"
+
     printf cross-device > "$work/cross-device.txt"
     HOME="$tmp_home" "$bin_dir/rm_trash" "$work/cross-device.txt"
     cross_restore="$(mktemp -d /dev/shm/toyfs-untrash.XXXXXX)"

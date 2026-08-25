@@ -15,6 +15,12 @@
 
 typedef struct
 {
+    dev_t dev;
+    ino_t ino;
+} visited_dir_t;
+
+typedef struct
+{
     queue_t *q;
     const crawler_config_t *conf;
     file_processor_t func;
@@ -24,6 +30,10 @@ typedef struct
     int *active_tasks;
     int *stopping;
     int *result;
+
+    visited_dir_t **visited;
+    size_t *visited_count;
+    size_t *visited_cap;
 } worker_ctx_t;
 
 static uint32_t mask_for_type(mode_t type)
@@ -87,6 +97,152 @@ static void finish_task(worker_ctx_t *ctx)
         queue_close(ctx->q);
 }
 
+static int mark_dir_seen(worker_ctx_t *ctx, const struct stat *st)
+{
+    pthread_mutex_lock(ctx->state_mt);
+
+    for (size_t i = 0; i < *ctx->visited_count; i++)
+    {
+        if ((*ctx->visited)[i].dev == st->st_dev && (*ctx->visited)[i].ino == st->st_ino)
+        {
+            pthread_mutex_unlock(ctx->state_mt);
+            return 0;
+        }
+    }
+
+    if (*ctx->visited_count == *ctx->visited_cap)
+    {
+        size_t new_cap = *ctx->visited_cap == 0 ? 64 : *ctx->visited_cap * 2;
+        visited_dir_t *new_seen = realloc(*ctx->visited, sizeof(visited_dir_t) * new_cap);
+        if (!new_seen)
+        {
+            pthread_mutex_unlock(ctx->state_mt);
+            return -1;
+        }
+
+        *ctx->visited = new_seen;
+        *ctx->visited_cap = new_cap;
+    }
+
+    (*ctx->visited)[*ctx->visited_count] = (visited_dir_t){
+        .dev = st->st_dev,
+        .ino = st->st_ino,
+    };
+    (*ctx->visited_count)++;
+
+    pthread_mutex_unlock(ctx->state_mt);
+    return 1;
+}
+
+static int enqueue_or_process_dir(worker_ctx_t *ctx, char *path, int depth);
+
+static int process_directory(worker_ctx_t *ctx, const char *path, int depth)
+{
+    struct stat dir_st;
+    if (ctx->conf->follow_symlinks ? stat(path, &dir_st) == -1 : lstat(path, &dir_st) == -1)
+        return 0;
+    if (S_ISDIR(dir_st.st_mode))
+    {
+        int seen = mark_dir_seen(ctx, &dir_st);
+        if (seen <= 0)
+            return seen;
+    }
+
+    DIR *d = opendir(path);
+    if (!d)
+    {
+        fprintf(stderr, "crawler: failed to open dir: %s\n", path);
+        return 0;
+    }
+
+    struct dirent *ent;
+    while (!is_stopping(ctx) && (ent = readdir(d)) != NULL)
+    {
+        if (strcmp(ent->d_name, ".") == 0 || strcmp(ent->d_name, "..") == 0)
+            continue;
+
+        char *new_path = join_path(path, ent->d_name);
+        if (!new_path)
+            continue;
+
+        struct stat st;
+        if (ctx->conf->follow_symlinks ? stat(new_path, &st) == -1 : lstat(new_path, &st) == -1)
+        {
+            free(new_path);
+            continue;
+        }
+
+        mode_t type = st.st_mode & S_IFMT;
+        uint32_t m = mask_for_type(type);
+        int is_dir = (type == S_IFDIR);
+
+        int rc = CRAWL_PROC_CONTINUE;
+        if (m && (ctx->conf->file_types & m))
+        {
+            rc = ctx->func(new_path, &st, ctx->user_data);
+
+            if (rc == CRAWL_PROC_ERROR || rc == CRAWL_PROC_STOP)
+            {
+                free(new_path);
+                request_stop(ctx, rc == CRAWL_PROC_ERROR ? -1 : 0);
+                break;
+            }
+        }
+
+        if (ctx->conf->crawl_through && is_dir && ((unsigned)depth < ctx->conf->max_depth) && rc != CRAWL_PROC_SKIP_SUBTREE)
+        {
+            if (enqueue_or_process_dir(ctx, new_path, depth + 1) != 0)
+            {
+                if (!is_stopping(ctx))
+                    request_stop(ctx, -1);
+                break;
+            }
+            continue;
+        }
+
+        free(new_path);
+    }
+
+    closedir(d);
+    return is_stopping(ctx) ? -1 : 0;
+}
+
+static int enqueue_or_process_dir(worker_ctx_t *ctx, char *path, int depth)
+{
+    task_t *nt = malloc(sizeof(task_t));
+    if (!nt)
+    {
+        free(path);
+        return -1;
+    }
+
+    nt->depth = depth;
+    nt->path = path;
+
+    pthread_mutex_lock(ctx->state_mt);
+    (*ctx->active_tasks)++;
+    pthread_mutex_unlock(ctx->state_mt);
+
+    queue_rc_t rc = queue_try_push(ctx->q, nt);
+    if (rc == QUEUE_OK)
+        return 0;
+
+    pthread_mutex_lock(ctx->state_mt);
+    (*ctx->active_tasks)--;
+    int already_stopping = *ctx->stopping;
+    pthread_mutex_unlock(ctx->state_mt);
+
+    if (rc == QUEUE_FULL)
+    {
+        int process_rc = process_directory(ctx, nt->path, nt->depth);
+        free_task(nt);
+        return process_rc;
+    }
+
+    free_task(nt);
+    return already_stopping ? 0 : -1;
+}
+
 static void *worker(void *arg)
 {
     worker_ctx_t *ctx = (worker_ctx_t *)arg;
@@ -111,84 +267,8 @@ static void *worker(void *arg)
             continue;
         }
 
-        DIR *d = opendir(t->path);
-        if (!d)
-        {
-            fprintf(stderr, "crawler: failed to open dir: %s\n", t->path);
-            free_task(t);
-            finish_task(ctx);
-            continue;
-        }
-
-        struct dirent *ent;
-        while (!is_stopping(ctx) && (ent = readdir(d)) != NULL)
-        {
-            if (strcmp(ent->d_name, ".") == 0 || strcmp(ent->d_name, "..") == 0)
-                continue;
-
-            char *new_path = join_path(t->path, ent->d_name);
-            if (!new_path)
-                continue;
-
-            struct stat st;
-            if (ctx->conf->follow_symlinks ? stat(new_path, &st) == -1 : lstat(new_path, &st) == -1)
-            {
-                free(new_path);
-                continue;
-            }
-
-            mode_t type = st.st_mode & S_IFMT;
-            uint32_t m = mask_for_type(type);
-
-            int is_dir = (type == S_IFDIR);
-
-            int rc = CRAWL_PROC_CONTINUE;
-            if (m && (ctx->conf->file_types & m))
-            {
-                rc = ctx->func(new_path, &st, ctx->user_data);
-
-                if (rc == CRAWL_PROC_ERROR || rc == CRAWL_PROC_STOP)
-                {
-                    free(new_path);
-                    request_stop(ctx, rc == CRAWL_PROC_ERROR ? -1 : 0);
-                    break;
-                }
-            }
-            if ((ctx->conf->crawl_through) && is_dir && (t->depth < ctx->conf->max_depth) && !(rc == CRAWL_PROC_SKIP_SUBTREE))
-            {
-                task_t *nt = malloc(sizeof(task_t));
-                if (!nt)
-                {
-                    free(new_path);
-                    request_stop(ctx, -1);
-                    continue;
-                }
-
-                nt->depth = t->depth + 1;
-                nt->path = new_path;
-
-                pthread_mutex_lock(ctx->state_mt);
-                (*ctx->active_tasks)++;
-                pthread_mutex_unlock(ctx->state_mt);
-
-                if (queue_push(ctx->q, nt) != QUEUE_OK)
-                {
-                    pthread_mutex_lock(ctx->state_mt);
-                    (*ctx->active_tasks)--;
-                    int already_stopping = *ctx->stopping;
-                    pthread_mutex_unlock(ctx->state_mt);
-
-                    free_task(nt);
-                    if (!already_stopping)
-                        request_stop(ctx, -1);
-                    break;
-                }
-                continue;
-            }
-            free(new_path);
-        }
-
-        closedir(d);
+        if (process_directory(ctx, t->path, t->depth) != 0 && !is_stopping(ctx))
+            request_stop(ctx, -1);
         free_task(t);
         finish_task(ctx);
     }
@@ -228,14 +308,58 @@ int crawl_directory_q(queue_t *q, const char *root_path, const crawler_config_t 
     }
 
     pthread_mutex_t state_mt;
-    pthread_mutex_init(&state_mt, NULL);
+    if (pthread_mutex_init(&state_mt, NULL) != 0)
+    {
+        free(ctx);
+        free(workers);
+        return -1;
+    }
     int active_tasks = 1; // root task
     int stopping = 0;
     int result = 0;
+    visited_dir_t *visited = NULL;
+    size_t visited_count = 0;
+    size_t visited_cap = 0;
+
+    ctx->q = q;
+    ctx->conf = config;
+    ctx->func = processor;
+    ctx->user_data = user_data;
+    ctx->state_mt = &state_mt;
+    ctx->active_tasks = &active_tasks;
+    ctx->stopping = &stopping;
+    ctx->result = &result;
+    ctx->visited = &visited;
+    ctx->visited_count = &visited_count;
+    ctx->visited_cap = &visited_cap;
+
+    size_t created = 0;
+    for (size_t i = 0; i < config->max_threads; i++)
+    {
+        if (pthread_create(&workers[i], NULL, worker, ctx) == 0)
+            created++;
+        else
+        {
+            fprintf(stderr, "failed to create thread %zu of %u\n", i, config->max_threads);
+            break;
+        }
+    }
+
+    if (created == 0)
+    {
+        queue_close(q);
+        pthread_mutex_destroy(&state_mt);
+        free(ctx);
+        free(workers);
+        return -1;
+    }
 
     task_t *root_task = malloc(sizeof(task_t));
     if (!root_task)
     {
+        request_stop(ctx, -1);
+        for (size_t i = 0; i < created; i++)
+            pthread_join(workers[i], NULL);
         pthread_mutex_destroy(&state_mt);
         free(ctx);
         free(workers);
@@ -247,6 +371,9 @@ int crawl_directory_q(queue_t *q, const char *root_path, const crawler_config_t 
     if (!root_task->path)
     {
         free(root_task);
+        request_stop(ctx, -1);
+        for (size_t i = 0; i < created; i++)
+            pthread_join(workers[i], NULL);
         pthread_mutex_destroy(&state_mt);
         free(ctx);
         free(workers);
@@ -255,39 +382,21 @@ int crawl_directory_q(queue_t *q, const char *root_path, const crawler_config_t 
 
     if (queue_push(q, root_task) != QUEUE_OK)
     {
-        free(root_task->path);
-        free(root_task);
+        free_task(root_task);
+        request_stop(ctx, -1);
+        for (size_t i = 0; i < created; i++)
+            pthread_join(workers[i], NULL);
         pthread_mutex_destroy(&state_mt);
         free(ctx);
         free(workers);
         return -1;
     }
 
-    ctx->q = q;
-    ctx->conf = config;
-    ctx->func = processor;
-    ctx->user_data = user_data;
-    ctx->state_mt = &state_mt;
-    ctx->active_tasks = &active_tasks;
-    ctx->stopping = &stopping;
-    ctx->result = &result;
-
-    size_t created = 0;
-    for (size_t i = 0; i < config->max_threads; i++)
-    {
-        if (pthread_create(&workers[i], NULL, worker, ctx) == 0)
-            created++;
-        else
-        {
-            fprintf(stderr, "failed to create thread %zu of %u\n", i, config->max_threads);
-            break;    // if couldn't create one thread it low possible to create next
-        }
-    }
-
     for (size_t i = 0; i < created; i++)
         pthread_join(workers[i], NULL);
 
     pthread_mutex_destroy(&state_mt);
+    free(visited);
     free(ctx);
     free(workers);
 

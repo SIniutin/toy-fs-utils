@@ -2,6 +2,10 @@
 
 This directory documents the user-facing utilities in the repository.
 
+## Design
+
+- [`design`](design.md) - queue and crawler invariants.
+
 ## Utilities
 
 - [`diskusage`](diskusage.md) - concurrent disk usage report for a directory tree.

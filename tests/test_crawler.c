@@ -401,6 +401,40 @@ static int test_follow_symlink_file(void)
     return 0;
 }
 
+static int test_follow_symlink_directory_cycle(void)
+{
+    char root[] = "/tmp/toyfs-crawler-cycle.XXXXXX";
+    ASSERT_TRUE(mkdtemp(root) != NULL);
+
+    char dir[PATH_MAX];
+    char file_path[PATH_MAX];
+    char cycle_path[PATH_MAX];
+    snprintf(dir, sizeof(dir), "%s/dir", root);
+    snprintf(file_path, sizeof(file_path), "%s/dir/file.txt", root);
+    snprintf(cycle_path, sizeof(cycle_path), "%s/dir/back-to-root", root);
+
+    ASSERT_TRUE(mkdir(dir, 0700) == 0);
+    ASSERT_TRUE(write_file(file_path, "x") == 0);
+    ASSERT_TRUE(symlink(root, cycle_path) == 0);
+
+    count_ctx_t ctx = {0};
+    ASSERT_TRUE(pthread_mutex_init(&ctx.lock, NULL) == 0);
+
+    crawler_config_t conf = {
+        .max_threads = 4,
+        .max_depth = UINT_MAX,
+        .follow_symlinks = 1,
+        .file_types = CRAWL_F_REG,
+        .crawl_through = 1,
+    };
+
+    ASSERT_TRUE(crawl_directory(root, &conf, count_file, &ctx) == 0);
+    ASSERT_TRUE(ctx.count == 1);
+
+    pthread_mutex_destroy(&ctx.lock);
+    return 0;
+}
+
 static int test_crawl_through_disabled(void)
 {
     char root[] = "/tmp/toyfs-crawler-through.XXXXXX";
@@ -451,6 +485,39 @@ static int test_wide_tree_multithreaded(void)
     ASSERT_TRUE(ctx.count == DIRS * FILES_PER_DIR);
 
     pthread_mutex_destroy(&ctx.lock);
+    return 0;
+}
+
+static int test_bounded_queue_wide_tree_finishes(void)
+{
+    enum
+    {
+        DIRS = 64,
+        FILES_PER_DIR = 2,
+    };
+
+    char root[] = "/tmp/toyfs-crawler-bounded.XXXXXX";
+    ASSERT_TRUE(make_wide_tree(root, DIRS, FILES_PER_DIR) == 0);
+
+    queue_t *q = make_queue(2);
+    ASSERT_TRUE(q != NULL);
+
+    count_ctx_t ctx = {0};
+    ASSERT_TRUE(pthread_mutex_init(&ctx.lock, NULL) == 0);
+
+    crawler_config_t conf = {
+        .max_threads = 8,
+        .max_depth = UINT_MAX,
+        .follow_symlinks = 0,
+        .file_types = CRAWL_F_REG,
+        .crawl_through = 1,
+    };
+
+    ASSERT_TRUE(crawl_directory_q(q, root, &conf, count_file, &ctx) == 0);
+    ASSERT_TRUE(ctx.count == DIRS * FILES_PER_DIR);
+
+    pthread_mutex_destroy(&ctx.lock);
+    free_queue(q);
     return 0;
 }
 
@@ -539,9 +606,13 @@ int main(void)
         return 1;
     if (test_follow_symlink_file() != 0)
         return 1;
+    if (test_follow_symlink_directory_cycle() != 0)
+        return 1;
     if (test_crawl_through_disabled() != 0)
         return 1;
     if (test_wide_tree_multithreaded() != 0)
+        return 1;
+    if (test_bounded_queue_wide_tree_finishes() != 0)
         return 1;
     if (test_stop_multithreaded_finishes() != 0)
         return 1;
