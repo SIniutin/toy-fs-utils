@@ -1,0 +1,8 @@
+build/
+build_bench/
+bench_results/
+bench_results*/
+.git/
+*.o
+*.a
+*.so
