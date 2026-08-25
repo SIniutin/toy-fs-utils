@@ -38,7 +38,7 @@ static int run_fifo_case(const fifo_case_t *tc)
         ASSERT_TRUE(out == &tc->values[i]);
     }
 
-    free_queue(q);
+    ASSERT_TRUE(free_queue(q) == 0);
     return 0;
 }
 
@@ -88,7 +88,34 @@ static int test_wraparound(void)
     ASSERT_TRUE(queue_pop(q, &out) == QUEUE_OK);
     ASSERT_TRUE(out == &values[4]);
 
-    free_queue(q);
+    ASSERT_TRUE(free_queue(q) == 0);
+    return 0;
+}
+
+static int test_try_push_full(void)
+{
+    queue_t *q = make_queue(2);
+    ASSERT_TRUE(q != NULL);
+
+    int a = 1;
+    int b = 2;
+    int c = 3;
+    void *out = NULL;
+
+    ASSERT_TRUE(queue_try_push(q, &a) == QUEUE_OK);
+    ASSERT_TRUE(queue_try_push(q, &b) == QUEUE_OK);
+    ASSERT_TRUE(queue_try_push(q, &c) == QUEUE_FULL);
+
+    ASSERT_TRUE(queue_pop(q, &out) == QUEUE_OK);
+    ASSERT_TRUE(out == &a);
+    ASSERT_TRUE(queue_try_push(q, &c) == QUEUE_OK);
+
+    ASSERT_TRUE(queue_pop(q, &out) == QUEUE_OK);
+    ASSERT_TRUE(out == &b);
+    ASSERT_TRUE(queue_pop(q, &out) == QUEUE_OK);
+    ASSERT_TRUE(out == &c);
+
+    ASSERT_TRUE(free_queue(q) == 0);
     return 0;
 }
 
@@ -123,7 +150,7 @@ static int test_blocking_push_cancel(void)
     ASSERT_TRUE(pthread_join(th, NULL) == 0);
     ASSERT_TRUE(ctx.rc == QUEUE_CANCELLED);
 
-    free_queue(q);
+    ASSERT_TRUE(free_queue(q) == 0);
     return 0;
 }
 
@@ -137,7 +164,7 @@ static int test_null_operations(void)
     ASSERT_TRUE(queue_pop(NULL, &out) == QUEUE_ERROR);
     queue_close(NULL);
     queue_cancel(NULL);
-    free_queue(NULL);
+    ASSERT_TRUE(free_queue(NULL) == 0);
 
     return 0;
 }
@@ -172,7 +199,7 @@ static int run_lifecycle_case(const lifecycle_case_t *tc)
         ASSERT_TRUE(out == &a);
     ASSERT_TRUE(queue_pop(q, &out) == tc->expected_second_pop);
 
-    free_queue(q);
+    ASSERT_TRUE(free_queue(q) == 0);
     return 0;
 }
 
@@ -207,17 +234,34 @@ static int test_lifecycle_table(void)
     return 0;
 }
 
+static int test_free_nonempty_queue_releases_queue_only(void)
+{
+    queue_t *q = make_queue(1);
+    ASSERT_TRUE(q != NULL);
+
+    int value = 1;
+
+    ASSERT_TRUE(queue_push(q, &value) == QUEUE_OK);
+    ASSERT_TRUE(free_queue(q) == 0);
+    ASSERT_TRUE(value == 1);
+    return 0;
+}
+
 int main(void)
 {
     if (test_fifo_table() != 0)
         return 1;
     if (test_wraparound() != 0)
         return 1;
+    if (test_try_push_full() != 0)
+        return 1;
     if (test_blocking_push_cancel() != 0)
         return 1;
     if (test_null_operations() != 0)
         return 1;
     if (test_lifecycle_table() != 0)
+        return 1;
+    if (test_free_nonempty_queue_releases_queue_only() != 0)
         return 1;
 
     return 0;

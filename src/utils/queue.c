@@ -1,7 +1,26 @@
 #include "utils/queue.h"
 
 #include <errno.h>
+#include <pthread.h>
 #include <stdlib.h>
+
+struct queue
+{
+    void **items;
+
+    unsigned head;
+    unsigned tail;
+
+    pthread_mutex_t mutex;
+    pthread_cond_t not_full;
+    pthread_cond_t not_empty;
+
+    unsigned size;
+    unsigned cap;
+
+    int closed;
+    int cancelled;
+};
 
 static void wake_all(queue_t *q)
 {
@@ -104,6 +123,38 @@ queue_rc_t queue_push(queue_t *q, void *val)
     return QUEUE_OK;
 }
 
+queue_rc_t queue_try_push(queue_t *q, void *val)
+{
+    if (!q)
+        return QUEUE_ERROR;
+
+    pthread_mutex_lock(&q->mutex);
+
+    if (q->cancelled)
+    {
+        pthread_mutex_unlock(&q->mutex);
+        return QUEUE_CANCELLED;
+    }
+    if (q->closed)
+    {
+        pthread_mutex_unlock(&q->mutex);
+        return QUEUE_CLOSED;
+    }
+    if (q->size == q->cap)
+    {
+        pthread_mutex_unlock(&q->mutex);
+        return QUEUE_FULL;
+    }
+
+    q->items[q->tail] = val;
+    q->tail = (q->tail + 1) % q->cap;
+    q->size++;
+
+    pthread_cond_signal(&q->not_empty);
+    pthread_mutex_unlock(&q->mutex);
+    return QUEUE_OK;
+}
+
 queue_rc_t queue_pop(queue_t *q, void **out_val)
 {
     if (!q || !out_val)
@@ -156,19 +207,12 @@ void queue_cancel(queue_t *q)
     pthread_mutex_unlock(&q->mutex);
 }
 
-void free_queue(queue_t *q)
+int free_queue(queue_t *q)
 {
     if (!q)
-        return;
+        return 0;
 
     pthread_mutex_lock(&q->mutex);
-    if (q->size != 0)
-    {
-        pthread_mutex_unlock(&q->mutex);
-        errno = EPERM;
-        return;
-    }
-
     q->head = 0;
     q->tail = 0;
     q->size = 0;
@@ -182,4 +226,5 @@ void free_queue(queue_t *q)
     pthread_cond_destroy(&q->not_full);
     pthread_mutex_destroy(&q->mutex);
     free(q);
+    return 0;
 }

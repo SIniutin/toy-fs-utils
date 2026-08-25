@@ -98,3 +98,14 @@ Current measurements include:
 - CPU utilization
 - Context switches
 - Scalability across worker counts
+
+Sample result from the 20k-file Docker matrix on an Intel i5-12450H:
+
+| workload | best model | threads | wall time | throughput |
+|---|---:|---:|---:|---:|
+| `wide / cheap` | B | 4 | 13.380 ms | 1,497,136 files/s |
+| `mixed / stat` | B | 12 | 13.473 ms | 1,495,153 files/s |
+| `mixed / heavy` | B | 16 | 156.780 ms | 128,486 files/s |
+| `deep / heavy` | A | 16 | 262.956 ms | 76,838 files/s |
+
+The benchmark report is in [`bench/REPORT.md`](bench/REPORT.md).

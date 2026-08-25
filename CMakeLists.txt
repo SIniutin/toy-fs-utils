@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.16)
-project(trash_tools C)
+project(toy_fs_utils C)
 
 set(CMAKE_C_STANDARD 17)
 set(CMAKE_C_STANDARD_REQUIRED ON)
@@ -131,6 +131,7 @@ target_include_directories(test_queue PRIVATE
 )
 target_link_libraries(test_queue PRIVATE queue)
 add_test(NAME queue COMMAND test_queue)
+set_tests_properties(queue PROPERTIES TIMEOUT 10)
 
 add_executable(test_common tests/test_common.c)
 target_include_directories(test_common PRIVATE
@@ -145,6 +146,7 @@ target_include_directories(test_crawler PRIVATE
 )
 target_link_libraries(test_crawler PRIVATE crawler queue utils)
 add_test(NAME crawler COMMAND test_crawler)
+set_tests_properties(crawler PROPERTIES TIMEOUT 10)
 
 add_executable(diskusage_unit tests/test_diskusage_unit.c)
 target_include_directories(diskusage_unit PRIVATE

@@ -1,12 +1,11 @@
 #ifndef UTILS_QUEUE_H
 #define UTILS_QUEUE_H
 
-#include <pthread.h>
-
 typedef enum {
     QUEUE_OK = 0,
     QUEUE_CLOSED = 1,
     QUEUE_CANCELLED = 2,
+    QUEUE_FULL = 3,
     QUEUE_ERROR = -1
 } queue_rc_t;
 
@@ -14,23 +13,7 @@ typedef enum {
  *   @brief Thread-safe blocking queue with bounded ring buffer
  *   @note Queue owns the ring buffer, not the values stored in it.
  */
-typedef struct
-{
-    void **items;
-
-    unsigned head;
-    unsigned tail;
-
-    pthread_mutex_t mutex;
-    pthread_cond_t not_full;
-    pthread_cond_t not_empty;
-
-    unsigned size; //TODO is unsigned best here?
-    unsigned cap;
-
-    int closed;
-    int cancelled;
-} queue_t;
+typedef struct queue queue_t;
 
 /**
  *  @brief Queue constructor,
@@ -43,6 +26,11 @@ queue_t *make_queue(unsigned cap);
  *  Blocking if full
  */
 queue_rc_t queue_push(queue_t *q, void *val);
+
+/**
+ * Non-blocking push. Returns QUEUE_FULL when the queue has no capacity.
+ */
+queue_rc_t queue_try_push(queue_t *q, void *val);
 
 /**
  *  Blocking if empty
@@ -60,8 +48,10 @@ void queue_close(queue_t *q);
 void queue_cancel(queue_t *q);
 
 /**
- * @brief Queue destroyer
+ * @brief Queue destroyer.
+ * @note Releases queue storage only. Queued values remain caller-owned.
+ * @return 0 on success.
  */
-void free_queue(queue_t *q);
+int free_queue(queue_t *q);
 
 #endif

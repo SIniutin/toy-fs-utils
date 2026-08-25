@@ -59,5 +59,7 @@ PLAN.md
 
 build/
 build_bench/
+build_asan/
+build_tsan/
 bench_results/
 bench_results*/
