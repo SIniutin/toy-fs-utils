@@ -55,7 +55,43 @@ bench_results_matrix/summary.md
 Docker gives a cleaner build/runtime baseline, but it does not make results
 perfectly hardware-independent. CPU model, kernel, Docker runtime, host load,
 and storage/cache behavior still matter, so `metadata.txt` is saved with every
-run.
+run. The runner also records the source revision and whether the working tree
+was dirty.
+
+## Reproducible Recipe
+
+Use a quiet machine and keep the Docker CPU/memory allocation unchanged between
+runs. The following command fixes the tree shape, fixture size, worker counts,
+callback workloads, models, and number of repetitions:
+
+```bash
+BENCH_MATRIX_DIR=bench_results_matrix_100k \
+BENCH_FILES=100000 \
+BENCH_REPEATS=7 \
+BENCH_THREADS="1 2 4 8 12 16" \
+BENCH_CALLBACKS="cheap stat heavy" \
+BENCH_MODELS="A B" \
+bench/run_docker_matrix.sh
+```
+
+Keep these artifacts with any published result:
+
+```text
+bench_results_matrix_100k/<shape>/results.csv
+bench_results_matrix_100k/<shape>/metadata.txt
+bench_results_matrix_100k/summary.md
+```
+
+The standard runner measures a **warm-cache workload**: it performs one warmup
+for every parameter combination before measured repetitions. Do not label those
+numbers as cold-cache results.
+
+For cold-cache experiments, use a dedicated Linux host rather than the Docker
+runner, create a fresh fixture before every measured process, and clear the host
+page cache between runs. Clearing caches requires root privileges and affects
+the whole machine, so never do it on a shared or production host. Record the
+exact command and kernel/filesystem configuration alongside the result instead
+of mixing cold- and warm-cache samples in one CSV.
 
 ## Local Build
 
