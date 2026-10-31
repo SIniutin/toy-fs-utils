@@ -1,0 +1,14 @@
+if(NOT EXISTS "@CMAKE_CURRENT_BINARY_DIR@/install_manifest.txt")
+    message(FATAL_ERROR "install_manifest.txt not found; install the project before uninstalling it")
+endif()
+
+file(STRINGS "@CMAKE_CURRENT_BINARY_DIR@/install_manifest.txt" installed_files)
+
+foreach(installed_file IN LISTS installed_files)
+    if(EXISTS "${installed_file}" OR IS_SYMLINK "${installed_file}")
+        message(STATUS "Removing ${installed_file}")
+        file(REMOVE "${installed_file}")
+    else()
+        message(STATUS "Already absent: ${installed_file}")
+    endif()
+endforeach()

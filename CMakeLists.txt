@@ -1,10 +1,16 @@
 cmake_minimum_required(VERSION 3.16)
-project(toy_fs_utils C)
+project(toy_fs_utils VERSION 1.0.0 LANGUAGES C)
 
 set(CMAKE_C_STANDARD 17)
 set(CMAKE_C_STANDARD_REQUIRED ON)
 
+include(GNUInstallDirs)
 enable_testing()
+find_package(Threads REQUIRED)
+
+if(APPLE)
+    add_compile_definitions(_DARWIN_C_SOURCE)
+endif()
 
 option(BUILD_BENCHMARKS "Build benchmark binaries" OFF)
 
@@ -81,7 +87,9 @@ foreach(lib
     )
 endforeach()
 
-target_link_libraries(crawler PUBLIC utils)
+target_link_libraries(queue PUBLIC Threads::Threads)
+target_link_libraries(crawler PUBLIC utils queue Threads::Threads)
+target_link_libraries(diskusage_stats PUBLIC Threads::Threads)
 target_link_libraries(trash_restore PUBLIC utils)
 target_link_libraries(trash_paths PUBLIC utils)
 target_link_libraries(trash_log PUBLIC utils)
@@ -109,7 +117,10 @@ endfunction()
 
 add_tool(diskusage src/diskusage/diskusage.c)
 target_link_libraries(diskusage PRIVATE diskusage_stats)
-add_tool(fswatch   src/fswatch.c)
+
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    add_tool(fswatch src/fswatch.c)
+endif()
 
 add_tool(rm_trash   src/trashbin/rm_trash.c)
 target_link_libraries(rm_trash PRIVATE trash_paths)
@@ -124,6 +135,35 @@ add_tool(backup_list  src/archive/backup_list.c)
 target_link_libraries(backup_list PRIVATE archive_paths)
 add_tool(upback       src/archive/upback.c)
 target_link_libraries(upback PRIVATE archive_paths archive_file_ops archive_restore)
+
+set(TOYFS_TOOLS
+    diskusage
+    rm_trash
+    list_trash
+    untrash
+    backup
+    backup_list
+    upback
+)
+
+if(TARGET fswatch)
+    list(APPEND TOYFS_TOOLS fswatch)
+endif()
+
+install(TARGETS ${TOYFS_TOOLS}
+    RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
+)
+
+configure_file(
+    ${CMAKE_CURRENT_SOURCE_DIR}/cmake/cmake_uninstall.cmake.in
+    ${CMAKE_CURRENT_BINARY_DIR}/cmake_uninstall.cmake
+    @ONLY
+)
+
+add_custom_target(uninstall
+    COMMAND ${CMAKE_COMMAND} -P ${CMAKE_CURRENT_BINARY_DIR}/cmake_uninstall.cmake
+    COMMENT "Removing files listed in install_manifest.txt"
+)
 
 add_executable(test_queue tests/test_queue.c)
 target_include_directories(test_queue PRIVATE
@@ -213,10 +253,12 @@ add_test(
     COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_backup.sh ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}
 )
 
-add_test(
-    NAME fswatch_e2e
-    COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_fswatch.sh ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}
-)
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    add_test(
+        NAME fswatch_e2e
+        COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_fswatch.sh ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}
+    )
+endif()
 
 if(BUILD_BENCHMARKS)
     add_executable(bench_crawler bench/bench_crawler.c)

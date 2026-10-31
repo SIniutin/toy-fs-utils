@@ -1,6 +1,7 @@
 name: CI
 
 on:
+  workflow_dispatch:
   push:
     branches: [dev, main]
   pull_request:
@@ -34,6 +35,17 @@ jobs:
           -DCMAKE_C_FLAGS="-Wall -Wextra -Wpedantic -Werror"
       - name: Build
         run: cmake --build build_warn
+
+  portable-macos:
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+      - name: Configure portable utilities
+        run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Debug
+      - name: Build
+        run: cmake --build build
+      - name: Test
+        run: ctest --test-dir build --output-on-failure
 
   asan-ubsan:
     runs-on: ubuntu-24.04
