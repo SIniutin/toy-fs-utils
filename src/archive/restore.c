@@ -24,6 +24,28 @@ static int resolve_dir_into(const char *path, char *out, size_t outsz)
     return snprintf_checked(out, outsz, "%s", resolved);
 }
 
+static int path_is_safe_relative(const char *path)
+{
+    if (!path || path[0] == '\0' || path[0] == '/')
+        return 0;
+
+    const char *component = path;
+    for (const char *p = path;; ++p)
+    {
+        if (*p != '/' && *p != '\0')
+            continue;
+
+        size_t len = (size_t)(p - component);
+        if (len == 0 || (len == 1 && component[0] == '.') ||
+            (len == 2 && component[0] == '.' && component[1] == '.'))
+            return 0;
+
+        if (*p == '\0')
+            return 1;
+        component = p + 1;
+    }
+}
+
 int archive_restore_should_skip_rel(const char *rel)
 {
     if (!rel || rel[0] == '\0')
@@ -71,7 +93,7 @@ int archive_restore_resolve_dest_root(const char *backup_root, const char *to_di
 
 int archive_restore_dest_path(const char *dest_root, const char *rel, char *out, size_t outsz)
 {
-    if (!dest_root || !rel || !out || archive_restore_should_skip_rel(rel))
+    if (!dest_root || !out || !path_is_safe_relative(rel) || archive_restore_should_skip_rel(rel))
         return -1;
     return join_path_into(out, outsz, dest_root, rel);
 }

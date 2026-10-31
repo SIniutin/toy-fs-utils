@@ -183,11 +183,20 @@ target_include_directories(archive_unit PRIVATE
 target_link_libraries(archive_unit PRIVATE utils archive_paths archive_file_ops archive_snapshot archive_restore)
 add_test(NAME archive_unit COMMAND archive_unit)
 
-add_executable(fswatch_unit tests/test_fswatch_unit.c)
-target_include_directories(fswatch_unit PRIVATE
+add_executable(paths_property tests/test_paths_property.c)
+target_include_directories(paths_property PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/include
 )
-add_test(NAME fswatch_unit COMMAND fswatch_unit)
+target_link_libraries(paths_property PRIVATE utils archive_restore)
+add_test(NAME paths_property COMMAND paths_property)
+
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    add_executable(fswatch_unit tests/test_fswatch_unit.c)
+    target_include_directories(fswatch_unit PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/include
+    )
+    add_test(NAME fswatch_unit COMMAND fswatch_unit)
+endif()
 
 add_test(
     NAME trash_e2e
