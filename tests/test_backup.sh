@@ -6,6 +6,13 @@ tmp_home="$(mktemp -d /tmp/toyfs-home.XXXXXX)"
 src="$(mktemp -d /tmp/toyfs-backup-src.XXXXXX)"
 restore="$(mktemp -d /tmp/toyfs-backup-restore.XXXXXX)"
 
+# macOS exposes /tmp through the /private/tmp symlink. The tools intentionally
+# persist and print realpath(3)-canonical paths, so compare against canonical
+# fixture paths on every platform.
+tmp_home="$(cd "$tmp_home" && pwd -P)"
+src="$(cd "$src" && pwd -P)"
+restore="$(cd "$restore" && pwd -P)"
+
 run_status_case() {
     local name="$1"
     local expected="$2"
@@ -86,6 +93,7 @@ test "$(cat "$restore/a.txt")" = "alpha"
 test "$(cat "$restore/sub/b.txt")" = "beta"
 
 restore_path="$(mktemp -d /tmp/toyfs-backup-restore-path.XXXXXX)"
+restore_path="$(cd "$restore_path" && pwd -P)"
 HOME="$tmp_home" "$bin_dir/upback" --to "$restore_path" "$backup_dir" >"/tmp/toyfs-upback-path.out"
 grep -q "Restoring from:" "/tmp/toyfs-upback-path.out"
 test "$(cat "$restore_path/a.txt")" = "alpha"

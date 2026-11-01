@@ -257,13 +257,17 @@ static int test_archive_restore_dest_dirs(void)
 
     char out[PATH_MAX];
     ASSERT_TRUE(archive_restore_resolve_dest_root(backup_root, "", out, sizeof(out)) == 0);
-    ASSERT_TRUE(strcmp(out, source_dir) == 0);
+    char source_real[PATH_MAX];
+    ASSERT_TRUE(realpath(source_dir, source_real) != NULL);
+    ASSERT_TRUE(strcmp(out, source_real) == 0);
     ASSERT_TRUE(access(source_dir, F_OK) == 0);
 
     char explicit_dir[PATH_MAX];
     ASSERT_TRUE(join_path_into(explicit_dir, sizeof(explicit_dir), root, "custom/nested") == 0);
     ASSERT_TRUE(archive_restore_resolve_dest_root(backup_root, explicit_dir, out, sizeof(out)) == 0);
-    ASSERT_TRUE(strcmp(out, explicit_dir) == 0);
+    char explicit_real[PATH_MAX];
+    ASSERT_TRUE(realpath(explicit_dir, explicit_real) != NULL);
+    ASSERT_TRUE(strcmp(out, explicit_real) == 0);
     ASSERT_TRUE(access(explicit_dir, F_OK) == 0);
 
     char explicit_file[PATH_MAX];
